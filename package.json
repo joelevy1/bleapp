@@ -23,7 +23,7 @@
     "react-native-svg": "14.1.0"
   },
   "engines": {
-    "node": ">=18 <=22"
+    "node": ">=18 <=24"
   },
   "private": true,
   "volta": {

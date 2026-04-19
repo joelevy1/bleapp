@@ -1,0 +1,41 @@
+# Submits EAS iOS builds from GitHub (Linux runner — avoids Windows EPERM on upload).
+# Requires repo secret: EXPO_TOKEN (https://expo.dev/account → Access tokens)
+
+name: EAS iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS profile (eas.json)
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
+
+concurrency:
+  group: eas-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Submit iOS build to EAS
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@latest build --platform ios --profile "${{ github.event.inputs.profile }}" --non-interactive --no-wait

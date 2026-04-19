@@ -1,0 +1,35 @@
+{
+  "name": "bleapp",
+  "version": "1.1.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "eas:ios": "eas build --platform ios --profile preview --non-interactive",
+    "eas:ios:prod": "eas build --platform ios --profile production --non-interactive"
+  },
+  "dependencies": {
+    "@plevo/expo-watch-connectivity": "^0.1.1",
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "buffer": "^6.0.3",
+    "expo": "~50.0.0",
+    "expo-constants": "~15.4.6",
+    "expo-status-bar": "~1.11.1",
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "react-native-ble-plx": "^3.5.1",
+    "react-native-svg": "14.1.0"
+  },
+  "engines": {
+    "node": ">=18 <=22"
+  },
+  "private": true,
+  "volta": {
+    "node": "20.20.2"
+  },
+  "devDependencies": {
+    "@expo/ngrok": "^4.1.0"
+  }
+}

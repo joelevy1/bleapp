@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Ballast Monitor",
+    "slug": "ballast-monitor",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon-dogs.png",
+    "userInterfaceStyle": "light",
+    "platforms": ["ios"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.joelevy.ballastmonitor",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "This app needs Bluetooth to connect to your boat's flow meter system.",
+        "NSBluetoothPeripheralUsageDescription": "This app needs Bluetooth to connect to your boat's flow meter system.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7a75e44e-f021-4c2e-b558-92b9d3153531"
+      }
+    },
+    "plugins": ["./plugins/withRemovePushEntitlement.js"]
+  }
+}

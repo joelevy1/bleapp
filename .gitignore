@@ -33,6 +33,9 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# iOS crash reports (often copied from device)
+*.ips
+
 # local env files
 .env*.local
 

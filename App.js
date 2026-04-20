@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { Ionicons } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
 import { useWatchSync } from './watchSync';
 
@@ -25,7 +26,6 @@ global.Buffer = Buffer;
 /** iOS 26: numeric fontWeight → UIFont.fontNamesForFamilyName / TSplicedFont path can fault in ShadowQueue (see device .ips). */
 const FW500 = Platform.OS === 'ios' ? {} : { fontWeight: '500' };
 const FW600 = Platform.OS === 'ios' ? {} : { fontWeight: '600' };
-const FW700 = Platform.OS === 'ios' ? {} : { fontWeight: '700' };
 
 const DEVICE_NAME = 'Ballast Monitor';
 const SERVICE_UUID = '0000181a-0000-1000-8000-00805f9b34fb';
@@ -56,28 +56,6 @@ function normalizeWifiBase(ip) {
   const s = String(ip || '').trim();
   if (!s) return '';
   return s.replace(/^https?:\/\//i, '').replace(/\/$/, '');
-}
-
-/** Pure RN (no react-native-svg) so the SVG native module is not loaded at startup. */
-function StopSignOctagon({ size = 48 }) {
-  return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size * 0.12,
-        backgroundColor: '#D32F2F',
-        borderWidth: 2,
-        borderColor: '#B71C1C',
-        justifyContent: 'center',
-        alignItems: 'center',
-      }}
-      accessibilityLabel="Disconnect"
-      accessibilityRole="button"
-    >
-      <Text style={[{ fontSize: size * 0.2, color: '#FFEBEE' }, FW700]}>STOP</Text>
-    </View>
-  );
 }
 
 export default function App() {
@@ -135,7 +113,8 @@ export default function App() {
   const [otaProgress, setOtaProgress] = useState(null);
   const [scanRssi, setScanRssi] = useState(null);
   const [versionDetailVisible, setVersionDetailVisible] = useState(false);
-  const [versionDetailBody, setVersionDetailBody] = useState('');
+  const [versionDetailLoading, setVersionDetailLoading] = useState(false);
+  const [versionCompareRows, setVersionCompareRows] = useState([]);
 
   const wifiPollRef = useRef(null);
 
@@ -228,6 +207,52 @@ export default function App() {
     return () => clearInterval(id);
   }, [connectionMode, device, isConnected, bleManager]);
 
+  // Passive RSSI on home only (no connect): delayed scan so the boat’s advertisement shows signal while on Wi‑Fi connect screen path is unchanged.
+  useEffect(() => {
+    if (currentScreen !== 'home' || isConnected || isScanning) return undefined;
+    let cancelled = false;
+    let delayTimer = null;
+    let stopTimer = null;
+    const task = InteractionManager.runAfterInteractions(() => {
+      delayTimer = setTimeout(async () => {
+        if (cancelled) return;
+        let mgr;
+        try {
+          mgr = await ensureBleManager();
+        } catch {
+          return;
+        }
+        if (cancelled) return;
+        mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+          if (cancelled || error || !dev) return;
+          if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
+            setScanRssi(dev.rssi);
+          }
+        });
+        stopTimer = setTimeout(() => {
+          try {
+            mgr.stopDeviceScan();
+          } catch (_) {
+            /* ignore */
+          }
+        }, 14000);
+      }, 2800);
+    });
+    return () => {
+      cancelled = true;
+      task.cancel();
+      if (delayTimer) clearTimeout(delayTimer);
+      if (stopTimer) clearTimeout(stopTimer);
+      if (bleManagerRef.current) {
+        try {
+          bleManagerRef.current.stopDeviceScan();
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    };
+  }, [currentScreen, isConnected, isScanning, ensureBleManager]);
+
   useEffect(() => {
     if (connectionMode !== 'wifi' || !wifiBase || !isConnected) {
       if (wifiPollRef.current) {
@@ -239,13 +264,25 @@ export default function App() {
     const tick = async () => {
       const base = `http://${wifiBase}`;
       try {
-        const res = await fetch(`${base}/api/pulses`, { method: 'GET' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const [pulsesRes, infoRes] = await Promise.all([
+          fetch(`${base}/api/pulses`, { method: 'GET' }),
+          fetch(`${base}/api/info`, { method: 'GET' }).catch(() => null),
+        ]);
+        if (!pulsesRes.ok) throw new Error(`HTTP ${pulsesRes.status}`);
+        const data = await pulsesRes.json();
         const arr = data.pulses || data.values || data;
         if (!Array.isArray(arr) || arr.length < 8) throw new Error('Bad JSON');
         setFlowValues(arr.slice(0, 8).map((n) => Number(n) || 0));
         setWifiPollError(null);
+        if (infoRes?.ok) {
+          try {
+            const info = await infoRes.json();
+            const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+            if (v) setPicoVersion(v);
+          } catch (_) {
+            /* ignore */
+          }
+        }
       } catch (e) {
         setWifiPollError(String(e.message || e));
       }
@@ -259,14 +296,24 @@ export default function App() {
   }, [connectionMode, wifiBase, isConnected]);
 
   useEffect(() => {
-    if (currentScreen !== 'settings' || connectionMode !== 'ble' || !device) return undefined;
+    if (currentScreen !== 'settings') return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const versionChar = await device.readCharacteristicForService(SERVICE_UUID, VERSION_CHAR_UUID);
-        if (cancelled || !versionChar?.value) return;
-        const v = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
-        if (v) setPicoVersion(v);
+        if (connectionMode === 'ble' && device) {
+          const versionChar = await device.readCharacteristicForService(SERVICE_UUID, VERSION_CHAR_UUID);
+          if (cancelled || !versionChar?.value) return;
+          const v = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
+          if (v) setPicoVersion(v);
+          return;
+        }
+        if (connectionMode === 'wifi' && wifiBase) {
+          const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
+          if (cancelled || !res.ok) return;
+          const info = await res.json();
+          const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+          if (v) setPicoVersion(v);
+        }
       } catch (e) {
         // ignore
       }
@@ -274,7 +321,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentScreen, connectionMode, device]);
+  }, [currentScreen, connectionMode, device, wifiBase]);
 
   const getSignalQuality = (rssi) => {
     if (!Number.isFinite(rssi)) return { bars: '○○○○○', text: 'No Signal' };
@@ -445,7 +492,7 @@ export default function App() {
       setDevice(null);
       setSignalStrength(null);
       setWifiPollError(null);
-      setPicoVersion(versionLabel || `WiFi @ ${base}`);
+      setPicoVersion(versionLabel || 'Unknown');
       setIsConnected(true);
       setWifiModalVisible(false);
       setCurrentScreen('main');
@@ -632,7 +679,7 @@ export default function App() {
     return res.text();
   };
 
-  const bleTransferFile = async (filename, content) => {
+  const bleTransferFile = async (filename, content, onChunkProgress) => {
     const buf = Buffer.from(content, 'utf8');
     const size = buf.length;
     const nameBuf = Buffer.from(filename, 'utf8');
@@ -650,7 +697,6 @@ export default function App() {
       start.toString('base64'),
     );
     await new Promise((r) => setTimeout(r, 50));
-    // Default BLE ATT payload is ~20 bytes; large writes get truncated/corrupted on iOS/Central.
     const chunkSize = 20;
     for (let off = 0; off < buf.length; off += chunkSize) {
       const chunk = buf.slice(off, off + chunkSize);
@@ -659,6 +705,7 @@ export default function App() {
         FILE_TRANSFER_UUID,
         chunk.toString('base64'),
       );
+      if (onChunkProgress) onChunkProgress(Math.min(off + chunk.length, buf.length), buf.length);
       await new Promise((r) => setTimeout(r, 20));
     }
     const end = Buffer.from([0x02]);
@@ -684,21 +731,29 @@ export default function App() {
       Alert.alert('OTA', 'Connect via BLE first.');
       return;
     }
+    if (otaProgress != null) return;
     setOtaProgress(0);
     try {
       for (let i = 0; i < OTA_FILES.length; i += 1) {
         const fn = OTA_FILES[i];
-        setOtaProgress(Math.round(((i + 0.1) / OTA_FILES.length) * 100));
         const text = await fetchGithubRawFile(fn);
-        await bleTransferFile(fn, text);
-        setOtaProgress(Math.round(((i + 1) / OTA_FILES.length) * 100));
+        await bleTransferFile(fn, text, (sent, total) => {
+          const t = (i + sent / total) / OTA_FILES.length;
+          setOtaProgress(Math.min(99, Math.round(t * 100)));
+        });
+        setOtaProgress(Math.round(((i + 1) / OTA_FILES.length) * 99));
       }
+      setOtaProgress(100);
       try {
         await bleSendReboot();
       } catch (e) {
         // Pico may already reboot from last file save
       }
-      Alert.alert('OTA', 'All files transferred. Pico should reboot (cmd 0x03).');
+      await disconnect();
+      Alert.alert(
+        'Update complete',
+        'Files flashed and reboot sent. Wait a few seconds, then use Connect to Boat (BLE) again. If the version still looks old, reconnect once more after the Pico finishes rebooting.',
+      );
     } catch (e) {
       Alert.alert('OTA Failed', String(e.message || e));
     } finally {
@@ -711,13 +766,15 @@ export default function App() {
       Alert.alert('OTA', 'Connect via WiFi first.');
       return;
     }
+    if (otaProgress != null) return;
     setOtaProgress(1);
     try {
       const files = OTA_FILES.join(',');
       const res = await wifiPostForm('/install_updates', `files=${encodeURIComponent(files)}`);
       setOtaProgress(100);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      Alert.alert('OTA', 'Install started; Pico will reboot shortly.');
+      await disconnect();
+      Alert.alert('Update started', 'The Pico should reboot. When it is back on the network, open WiFi on the home screen and enter its IP again.');
     } catch (e) {
       Alert.alert('OTA Failed', String(e.message || e));
     } finally {
@@ -748,10 +805,11 @@ export default function App() {
                 cmd.toString('base64'),
               );
               await disconnect();
+              setCurrentScreen('home');
               setWifiModalVisible(true);
               Alert.alert(
                 'WiFi',
-                'When the Pico is on WiFi, enter its IP in the dialog (or check Pushover / ntfy / router for Ballast-Monitor). GET /api/info on the Pico shows version and IP.',
+                'You are on the home screen with the WiFi dialog open. When the Pico is online, enter its IP (router DHCP list, Pushover/ntfy, or USB serial). GET http://<ip>/api/info shows version.',
               );
             } catch (e) {
               Alert.alert('Failed', String(e.message || e));
@@ -779,8 +837,8 @@ export default function App() {
             try {
               const res = await wifiPostForm('/reboot_to_ble', '');
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              Alert.alert('Pico', 'Rebooting to BLE. Use Connect to Boat on the home screen.');
               disconnect();
+              Alert.alert('Pico', 'Rebooting to Bluetooth. Use Connect to Boat on the home screen when the device is advertising.');
             } catch (e) {
               Alert.alert('Failed', String(e.message || e));
             }
@@ -792,26 +850,46 @@ export default function App() {
 
   const openVersionDetails = async () => {
     setVersionDetailVisible(true);
-    setVersionDetailBody('Loading…');
+    setVersionDetailLoading(true);
+    setVersionCompareRows([]);
+    const deviceLine = String(picoVersion ?? '').replace(/\0/g, '').trim();
     try {
-      const blocks = [];
+      const rows = [];
       for (let i = 0; i < OTA_FILES.length; i += 1) {
         const fn = OTA_FILES[i];
         const text = await fetchGithubRawFile(fn);
-        const head = text.split('\n').slice(0, 8).join('\n');
-        blocks.push(`${fn}:\n${head}`);
+        const head = text.split('\n').slice(0, 50).join('\n');
+        const hint = text.split('\n').find((l) => l.trim()) || '';
+        const shortHint = hint.trim().slice(0, 80);
+        let status = 'unknown';
+        if (deviceLine && deviceLine !== 'Unknown') {
+          const tokens = deviceLine.split(/[\s/_-]+/).filter((t) => t.length >= 3);
+          status = tokens.some((t) => head.includes(t)) ? 'ok' : 'stale';
+        }
+        rows.push({ fn, status, hint: shortHint });
       }
-      const local = String(picoVersion || '').trim();
-      setVersionDetailBody(
-        `Device reported: ${local || 'Unknown'}\n\nGitHub main (first lines per file):\n\n${blocks.join('\n\n')}`,
-      );
+      setVersionCompareRows(rows);
     } catch (e) {
-      setVersionDetailBody(String(e.message || e));
+      setVersionCompareRows([{ fn: '—', status: 'unknown', hint: String(e.message || e) }]);
+    } finally {
+      setVersionDetailLoading(false);
     }
   };
 
   const checkFirmwareUpdates = async () => {
     try {
+      if (connectionMode === 'wifi' && wifiBase) {
+        try {
+          const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
+          if (res.ok) {
+            const info = await res.json();
+            const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+            if (v) setPicoVersion(v);
+          }
+        } catch (_) {
+          /* ignore */
+        }
+      }
       const commit = await fetchGithubLatestCommit();
       const sha = commit.sha?.slice(0, 7) || '?';
       const msg = commit.commit?.message?.split('\n')[0] || '';
@@ -820,7 +898,13 @@ export default function App() {
       const needs = local !== 'Unknown' && !local.includes(sha);
       Alert.alert(
         'Firmware',
-        `Device: ${local}\nGitHub main: ${remoteHint}\n\n${needs ? 'Commit SHA is not in the device string — an update may be available.' : 'Use Settings > Compare file versions (GitHub) to see file headers, or Apply to reinstall.'}`,
+        `Device version: ${local}\nGitHub main: ${remoteHint}\n\n${
+          local === 'Unknown'
+            ? 'Connect via BLE or WiFi so the app can read /api/info or the BLE version string.'
+            : needs
+              ? 'Commit SHA is not in the device string — an update may be available.'
+              : 'Compare lines in Settings show which file headers match the device line.'
+        }`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -1035,6 +1119,10 @@ export default function App() {
             </View>
           ))}
 
+          <TouchableOpacity style={styles.saveButton} onPress={saveSettingsToStorage}>
+            <Text style={styles.saveButtonText}>Save</Text>
+          </TouchableOpacity>
+
           <Text style={styles.sectionTitle}>Firmware (OTA)</Text>
           {otaProgress != null ? (
             <View style={styles.progressWrap}>
@@ -1044,18 +1132,27 @@ export default function App() {
               </View>
             </View>
           ) : null}
-          <TouchableOpacity style={styles.secondaryBtn} onPress={checkFirmwareUpdates}>
+          <TouchableOpacity
+            style={[styles.secondaryBtn, otaProgress != null && styles.secondaryBtnDisabled]}
+            disabled={otaProgress != null}
+            onPress={checkFirmwareUpdates}
+          >
             <Text style={styles.secondaryBtnText}>Check for updates</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={openVersionDetails}>
+          <TouchableOpacity
+            style={[styles.secondaryBtn, otaProgress != null && styles.secondaryBtnDisabled]}
+            disabled={otaProgress != null}
+            onPress={openVersionDetails}
+          >
             <Text style={styles.secondaryBtnText}>Compare file versions (GitHub)</Text>
           </TouchableOpacity>
 
-          <Text style={styles.sectionTitle}>Notifications</Text>
+          <Text style={styles.sectionTitle}>Notifications and finding the Pico on WiFi</Text>
           <Text style={styles.helpText}>
-            This app does not send push alerts itself. On the Pico, optional WiFi startup notifications: set PUSHOVER_USER_KEY
-            and PUSHOVER_APP_TOKEN in config (Pushover iOS app), and/or NTFY_TOPIC (ntfy app). The Pico also requests the DHCP
-            name Ballast-Monitor so your router may show it by that name.
+            While connected over WiFi, this app polls GET /api/info — the Pico line above updates from that when available.
+            This app does not send push alerts by itself. On the Pico, set PUSHOVER_* keys and/or NTFY_TOPIC for a phone
+            notification with the IP, or check your router DHCP list (hostname Ballast-Monitor if the firmware requests it)
+            or USB serial / Thonny.
           </Text>
 
           <Text style={styles.sectionTitle}>Connection</Text>
@@ -1078,10 +1175,6 @@ export default function App() {
             <Text style={styles.secondaryBtnText}>Reboot Pico to Bluetooth (WiFi only)</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.saveButton} onPress={saveSettingsToStorage}>
-            <Text style={styles.saveButtonText}>Save</Text>
-          </TouchableOpacity>
-
           <TouchableOpacity style={styles.closeButton} onPress={() => setCurrentScreen('main')}>
             <Text style={styles.closeButtonText}>Close</Text>
           </TouchableOpacity>
@@ -1090,9 +1183,29 @@ export default function App() {
         <Modal visible={versionDetailVisible} animationType="slide" transparent>
           <View style={styles.modalBackdrop}>
             <View style={styles.versionDetailCard}>
-              <Text style={styles.modalTitle}>Version comparison</Text>
+              <Text style={styles.modalTitle}>GitHub files vs device</Text>
+              <Text style={styles.versionCompareSubtitle}>
+                Pico line: {String(picoVersion ?? '').replace(/\0/g, '').trim() || 'Unknown'} — ✓ = line found in file header, ●
+                = not found (update may be needed), — = no device line to compare.
+              </Text>
               <ScrollView style={styles.versionDetailScroll}>
-                <Text style={styles.versionDetailText}>{versionDetailBody}</Text>
+                {versionDetailLoading ? (
+                  <Text style={styles.versionDetailText}>Loading…</Text>
+                ) : (
+                  versionCompareRows.map((row, idx) => (
+                    <View key={`${row.fn}-${idx}`} style={styles.versionCompareRow}>
+                      <Text style={styles.versionCompareName} numberOfLines={1}>
+                        {row.fn}
+                      </Text>
+                      <Text style={styles.versionCompareIcon} accessibilityLabel={row.status}>
+                        {row.status === 'ok' ? '✓' : row.status === 'stale' ? '●' : '—'}
+                      </Text>
+                      <Text style={styles.versionCompareHint} numberOfLines={2}>
+                        {row.hint}
+                      </Text>
+                    </View>
+                  ))
+                )}
               </ScrollView>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setVersionDetailVisible(false)}>
                 <Text style={styles.modalCancelText}>Close</Text>
@@ -1209,11 +1322,19 @@ export default function App() {
       </ScrollView>
 
       <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.settingsButton} onPress={() => setCurrentScreen('settings')}>
-          <Text style={styles.settingsIcon}>Settings</Text>
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={() => setCurrentScreen('settings')}
+          accessibilityLabel="Settings"
+        >
+          <Ionicons name="settings-outline" size={28} color="#333" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.disconnectButton} onPress={disconnect}>
-          <StopSignOctagon size={48} />
+        <TouchableOpacity
+          style={styles.disconnectButton}
+          onPress={disconnect}
+          accessibilityLabel="Disconnect"
+        >
+          <Ionicons name="exit-outline" size={40} color="#C62828" />
         </TouchableOpacity>
       </View>
     </View>
@@ -1306,8 +1427,7 @@ const styles = StyleSheet.create({
   resetAllBottom: { alignSelf: 'center', marginBottom: 20, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fafafa' },
   resetAllBottomText: { fontSize: 12, color: '#777' },
   bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#eee' },
-  settingsButton: { width: 44, height: 44, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
-  settingsIcon: { fontSize: 20 },
+  settingsButton: { width: 48, height: 48, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
   disconnectButton: { width: 52, height: 52, justifyContent: 'center', alignItems: 'center' },
   settingsScroll: { flex: 1 },
   settingsScrollContent: { padding: 16, paddingBottom: 40 },
@@ -1334,7 +1454,19 @@ const styles = StyleSheet.create({
   saveButtonText: { color: 'white', fontSize: 16, ...FW600 },
   closeButton: { backgroundColor: '#4CAF50', padding: 16, borderRadius: 12, marginTop: 12, alignItems: 'center' },
   closeButtonText: { color: 'white', fontSize: 16, ...FW500 },
-  versionDetailCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, maxHeight: '80%', width: '100%' },
-  versionDetailScroll: { maxHeight: 400 },
+  versionDetailCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, maxHeight: '85%', width: '100%' },
+  versionCompareSubtitle: { fontSize: 11, color: '#666', marginBottom: 10, lineHeight: 15 },
+  versionDetailScroll: { maxHeight: 380 },
   versionDetailText: { fontSize: 11, color: '#333' },
+  versionCompareRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ddd',
+  },
+  versionCompareName: { flex: 1, minWidth: '40%', fontSize: 12, ...FW600, color: '#1565C0' },
+  versionCompareIcon: { fontSize: 16, width: 28, textAlign: 'center', color: '#333' },
+  versionCompareHint: { flexBasis: '100%', fontSize: 10, color: '#666', marginTop: 4 },
 });

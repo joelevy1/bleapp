@@ -6,7 +6,9 @@
     "orientation": "portrait",
     "icon": "./assets/icon-dogs.png",
     "userInterfaceStyle": "light",
-    "platforms": ["ios"],
+    "platforms": [
+      "ios"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.joelevy.ballastmonitor",
@@ -33,7 +35,8 @@
             "newArchEnabled": false
           }
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }

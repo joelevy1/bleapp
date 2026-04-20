@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { registerRootComponent } from 'expo';
+import App from './App';
 
 /**
  * Catches render errors so production builds show the JS message instead of SIGABRT
@@ -48,44 +49,12 @@ const styles = StyleSheet.create({
   errorBody: { fontSize: 13, color: '#333' },
 });
 
-/**
- * Load App after first frame; native modules in App.js evaluate after import().
- */
-function DeferredRoot() {
-  const [AppMod, setAppMod] = useState(null);
-  const [loadErr, setLoadErr] = useState(null);
-
-  useEffect(() => {
-    import('./App')
-      .then((m) => setAppMod(() => m.default))
-      .catch((e) => setLoadErr(e));
-  }, []);
-
-  if (loadErr) {
-    const msg = loadErr?.message != null ? String(loadErr.message) : String(loadErr);
-    return (
-      <View style={styles.errorWrap}>
-        <Text style={styles.errorTitle}>Failed to load app bundle</Text>
-        <Text selectable style={styles.errorBody}>
-          {msg}
-        </Text>
-      </View>
-    );
-  }
-
-  if (!AppMod) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
-        <ActivityIndicator size="large" color="#1976D2" />
-      </View>
-    );
-  }
-
+function AppRoot() {
   return (
     <RootErrorBoundary>
-      <AppMod />
+      <App />
     </RootErrorBoundary>
   );
 }
 
-registerRootComponent(DeferredRoot);
+registerRootComponent(AppRoot);

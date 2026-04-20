@@ -2,6 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import { buildWatchContext } from './watchPayload';
 
+/** Set true only after verifying Watch + @plevo/expo-watch-connectivity on your iOS build. */
+const WATCH_ENABLED = false;
+
 const SYNC_MS = 2500;
 const ACTIVATION_SETTLE_MS = 2000;
 
@@ -31,7 +34,7 @@ export function useWatchSync(deps) {
   depsRef.current = deps;
 
   useEffect(() => {
-    if (Platform.OS !== 'ios') return undefined;
+    if (!WATCH_ENABLED || Platform.OS !== 'ios') return undefined;
 
     let cancelled = false;
     let intervalId = null;

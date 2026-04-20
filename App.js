@@ -12,7 +12,6 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
-  InteractionManager,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -42,8 +41,6 @@ const STORAGE = {
   PULSES_PER_GAL: 'ballast_pulses_per_gal',
   POUNDS_PER_GAL: 'ballast_pounds_per_gal',
   TANK_MAX: 'ballast_tank_max',
-  /** Set after first cold start; delayed home RSSI scan runs only after this exists (2nd launch+). */
-  APP_OPENED_BEFORE: 'ballast_app_opened_before',
 };
 
 const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
@@ -143,41 +140,38 @@ export default function App() {
   ];
 
   useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => {
-      (async () => {
-        try {
-          const [ip, um, ppg, ppg2, tm] = await Promise.all([
-            AsyncStorage.getItem(STORAGE.WIFI_IP),
-            AsyncStorage.getItem(STORAGE.UNIT_MODE),
-            AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
-            AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
-            AsyncStorage.getItem(STORAGE.TANK_MAX),
-          ]);
-          if (ip) {
-            setWifiIpInput(ip);
-            setWifiBase(normalizeWifiBase(ip));
-          }
-          if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
-          if (ppg) {
-            const n = parseFloat(ppg, 10);
-            if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
-          }
-          if (ppg2) {
-            const n = parseFloat(ppg2, 10);
-            if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
-          }
-          if (tm) {
-            const o = JSON.parse(tm);
-            if (o && typeof o === 'object') {
-              setTankMaxValues((prev) => ({ ...prev, ...o }));
-            }
-          }
-        } catch (e) {
-          // ignore
+    (async () => {
+      try {
+        const [ip, um, ppg, ppg2, tm] = await Promise.all([
+          AsyncStorage.getItem(STORAGE.WIFI_IP),
+          AsyncStorage.getItem(STORAGE.UNIT_MODE),
+          AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
+          AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
+          AsyncStorage.getItem(STORAGE.TANK_MAX),
+        ]);
+        if (ip) {
+          setWifiIpInput(ip);
+          setWifiBase(normalizeWifiBase(ip));
         }
-      })();
-    });
-    return () => task.cancel();
+        if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
+        if (ppg) {
+          const n = parseFloat(ppg, 10);
+          if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
+        }
+        if (ppg2) {
+          const n = parseFloat(ppg2, 10);
+          if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
+        }
+        if (tm) {
+          const o = JSON.parse(tm);
+          if (o && typeof o === 'object') {
+            setTankMaxValues((prev) => ({ ...prev, ...o }));
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
   }, []);
 
   const persistWifiIp = useCallback(async (v) => {
@@ -223,68 +217,6 @@ export default function App() {
     }, 2000);
     return () => clearInterval(id);
   }, [connectionMode, device, isConnected, bleManager]);
-
-  // Passive RSSI on home (scan only, no connect): 2nd app launch onward, after a delay — not on first install/open.
-  useEffect(() => {
-    if (currentScreen !== 'home' || isConnected || isScanning) return undefined;
-    let cancelled = false;
-    let delayTimer = null;
-    let stopTimer = null;
-
-    const task = InteractionManager.runAfterInteractions(() => {
-      (async () => {
-        if (cancelled) return;
-        try {
-          const prev = await AsyncStorage.getItem(STORAGE.APP_OPENED_BEFORE);
-          if (prev !== '1') {
-            await AsyncStorage.setItem(STORAGE.APP_OPENED_BEFORE, '1');
-            return;
-          }
-        } catch {
-          return;
-        }
-
-        if (cancelled) return;
-        delayTimer = setTimeout(async () => {
-          if (cancelled) return;
-          let mgr;
-          try {
-            mgr = await ensureBleManager();
-          } catch {
-            return;
-          }
-          if (cancelled) return;
-          mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
-            if (cancelled || error || !dev) return;
-            if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
-              setScanRssi(dev.rssi);
-            }
-          });
-          stopTimer = setTimeout(() => {
-            try {
-              mgr.stopDeviceScan();
-            } catch (_) {
-              /* ignore */
-            }
-          }, 12000);
-        }, 2800);
-      })();
-    });
-
-    return () => {
-      cancelled = true;
-      task.cancel();
-      if (delayTimer) clearTimeout(delayTimer);
-      if (stopTimer) clearTimeout(stopTimer);
-      if (bleManagerRef.current) {
-        try {
-          bleManagerRef.current.stopDeviceScan();
-        } catch (_) {
-          /* ignore */
-        }
-      }
-    };
-  }, [currentScreen, isConnected, isScanning, ensureBleManager]);
 
   useEffect(() => {
     if (connectionMode !== 'wifi' || !wifiBase || !isConnected) {

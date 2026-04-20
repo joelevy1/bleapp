@@ -187,6 +187,36 @@ export default function App() {
     }
   }, [unitMode, pulsesPerGallon, poundsPerGallon, tankMaxValues]);
 
+  /** BLE version char or WiFi /api/info; returns version string or null. */
+  const fetchPicoVersionNow = useCallback(async () => {
+    try {
+      if (connectionMode === 'ble' && device) {
+        const versionChar = await device.readCharacteristicForService(SERVICE_UUID, VERSION_CHAR_UUID);
+        if (versionChar?.value) {
+          const v = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
+          if (v) {
+            setPicoVersion(v);
+            return v;
+          }
+        }
+      }
+      if (connectionMode === 'wifi' && wifiBase) {
+        const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
+        if (res.ok) {
+          const info = await res.json();
+          const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+          if (v) {
+            setPicoVersion(v);
+            return v;
+          }
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }, [connectionMode, device, wifiBase]);
+
   useEffect(() => {
     if (!bleManager || connectionMode !== 'ble' || !device || !isConnected) return undefined;
     const id = setInterval(async () => {
@@ -235,8 +265,8 @@ export default function App() {
           } catch (_) {
             /* ignore */
           }
-        }, 14000);
-      }, 2800);
+        }, 10000);
+      }, 600);
     });
     return () => {
       cancelled = true;
@@ -299,29 +329,27 @@ export default function App() {
     if (currentScreen !== 'settings') return undefined;
     let cancelled = false;
     (async () => {
-      try {
-        if (connectionMode === 'ble' && device) {
-          const versionChar = await device.readCharacteristicForService(SERVICE_UUID, VERSION_CHAR_UUID);
-          if (cancelled || !versionChar?.value) return;
-          const v = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
-          if (v) setPicoVersion(v);
-          return;
+      let v = await fetchPicoVersionNow();
+      if (cancelled) return;
+      if (!v) {
+        const ip = normalizeWifiBase(wifiIpInput);
+        if (ip) {
+          try {
+            const res = await fetch(`http://${ip}/api/info`, { method: 'GET' });
+            if (cancelled || !res.ok) return;
+            const info = await res.json();
+            const ver = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+            if (ver) setPicoVersion(ver);
+          } catch (_) {
+            /* ignore */
+          }
         }
-        if (connectionMode === 'wifi' && wifiBase) {
-          const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
-          if (cancelled || !res.ok) return;
-          const info = await res.json();
-          const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
-          if (v) setPicoVersion(v);
-        }
-      } catch (e) {
-        // ignore
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [currentScreen, connectionMode, device, wifiBase]);
+  }, [currentScreen, fetchPicoVersionNow, wifiIpInput]);
 
   const getSignalQuality = (rssi) => {
     if (!Number.isFinite(rssi)) return { bars: '○○○○○', text: 'No Signal' };
@@ -805,12 +833,11 @@ export default function App() {
                 cmd.toString('base64'),
               );
               await disconnect();
-              setCurrentScreen('home');
-              setWifiModalVisible(true);
-              Alert.alert(
-                'WiFi',
-                'You are on the home screen with the WiFi dialog open. When the Pico is online, enter its IP (router DHCP list, Pushover/ntfy, or USB serial). GET http://<ip>/api/info shows version.',
-              );
+              InteractionManager.runAfterInteractions(() => {
+                setCurrentScreen('home');
+                setWifiModalVisible(true);
+                Alert.alert('WiFi', 'Enter the Pico IP when it is online, or use your saved IP.');
+              });
             } catch (e) {
               Alert.alert('Failed', String(e.message || e));
             }
@@ -852,8 +879,28 @@ export default function App() {
     setVersionDetailVisible(true);
     setVersionDetailLoading(true);
     setVersionCompareRows([]);
-    const deviceLine = String(picoVersion ?? '').replace(/\0/g, '').trim();
     try {
+      let deviceLine = String(picoVersion ?? '').replace(/\0/g, '').trim();
+      const fresh = await fetchPicoVersionNow();
+      if (fresh) deviceLine = fresh;
+      if (!deviceLine || deviceLine === 'Unknown') {
+        const ip = normalizeWifiBase(wifiIpInput);
+        if (ip) {
+          try {
+            const res = await fetch(`http://${ip}/api/info`, { method: 'GET' });
+            if (res.ok) {
+              const info = await res.json();
+              const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+              if (v) {
+                setPicoVersion(v);
+                deviceLine = v;
+              }
+            }
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }
       const rows = [];
       for (let i = 0; i < OTA_FILES.length; i += 1) {
         const fn = OTA_FILES[i];
@@ -863,8 +910,11 @@ export default function App() {
         const shortHint = hint.trim().slice(0, 80);
         let status = 'unknown';
         if (deviceLine && deviceLine !== 'Unknown') {
-          const tokens = deviceLine.split(/[\s/_-]+/).filter((t) => t.length >= 3);
-          status = tokens.some((t) => head.includes(t)) ? 'ok' : 'stale';
+          const dl = deviceLine.trim();
+          const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
+          const byToken = tokens.some((t) => t.length >= 3 && head.includes(t));
+          const byPrefix = dl.length >= 6 && head.includes(dl.slice(0, Math.min(24, dl.length)));
+          status = byToken || byPrefix ? 'ok' : 'stale';
         }
         rows.push({ fn, status, hint: shortHint });
       }
@@ -878,13 +928,18 @@ export default function App() {
 
   const checkFirmwareUpdates = async () => {
     try {
-      if (connectionMode === 'wifi' && wifiBase) {
+      let v = await fetchPicoVersionNow();
+      const savedIp = normalizeWifiBase(wifiIpInput);
+      if (!v && savedIp) {
         try {
-          const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
+          const res = await fetch(`http://${savedIp}/api/info`, { method: 'GET' });
           if (res.ok) {
             const info = await res.json();
-            const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
-            if (v) setPicoVersion(v);
+            const ver = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+            if (ver) {
+              setPicoVersion(ver);
+              v = ver;
+            }
           }
         } catch (_) {
           /* ignore */
@@ -894,7 +949,7 @@ export default function App() {
       const sha = commit.sha?.slice(0, 7) || '?';
       const msg = commit.commit?.message?.split('\n')[0] || '';
       const remoteHint = `${sha} ${msg}`;
-      const local = String(picoVersion || '').replace(/\0/g, '').trim() || 'Unknown';
+      const local = (v && String(v).trim()) || String(picoVersion || '').replace(/\0/g, '').trim() || 'Unknown';
       const needs = local !== 'Unknown' && !local.includes(sha);
       Alert.alert(
         'Firmware',
@@ -1147,19 +1202,7 @@ export default function App() {
             <Text style={styles.secondaryBtnText}>Compare file versions (GitHub)</Text>
           </TouchableOpacity>
 
-          <Text style={styles.sectionTitle}>Notifications and finding the Pico on WiFi</Text>
-          <Text style={styles.helpText}>
-            While connected over WiFi, this app polls GET /api/info — the Pico line above updates from that when available.
-            This app does not send push alerts by itself. On the Pico, set PUSHOVER_* keys and/or NTFY_TOPIC for a phone
-            notification with the IP, or check your router DHCP list (hostname Ballast-Monitor if the firmware requests it)
-            or USB serial / Thonny.
-          </Text>
-
           <Text style={styles.sectionTitle}>Connection</Text>
-          <Text style={styles.helpText}>
-            Normal use is Bluetooth. One-shot WiFi runs the web UI for this session only; after a full power cycle the Pico
-            returns to BLE. Use “Reboot to BLE” while on WiFi to return to Bluetooth without pulling power.
-          </Text>
           <TouchableOpacity
             style={[styles.secondaryBtn, connectionMode !== 'ble' && styles.secondaryBtnDisabled]}
             disabled={connectionMode !== 'ble'}
@@ -1185,8 +1228,8 @@ export default function App() {
             <View style={styles.versionDetailCard}>
               <Text style={styles.modalTitle}>GitHub files vs device</Text>
               <Text style={styles.versionCompareSubtitle}>
-                Pico line: {String(picoVersion ?? '').replace(/\0/g, '').trim() || 'Unknown'} — ✓ = line found in file header, ●
-                = not found (update may be needed), — = no device line to compare.
+                Device line: {String(picoVersion ?? '').replace(/\0/g, '').trim() || 'Unknown'} — ✓ match, ● mismatch, — no
+                version.
               </Text>
               <ScrollView style={styles.versionDetailScroll}>
                 {versionDetailLoading ? (

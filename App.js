@@ -41,6 +41,8 @@ const STORAGE = {
   PULSES_PER_GAL: 'ballast_pulses_per_gal',
   POUNDS_PER_GAL: 'ballast_pounds_per_gal',
   TANK_MAX: 'ballast_tank_max',
+  /** Set after first cold start; delayed home RSSI scan runs only after this exists (2nd launch+). */
+  APP_OPENED_BEFORE: 'ballast_app_opened_before',
 };
 
 const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
@@ -74,8 +76,8 @@ function StopSignOctagon({ size = 48 }) {
 }
 
 export default function App() {
-  // Do NOT create BleManager on launch — iOS can fault in CoreBluetooth during init (see BlePlxQueue in .ips).
-  // Load react-native-ble-plx only when the user taps "Connect to Boat (BLE)".
+  // Do not create BleManager on the first cold start. After that: optional delayed passive scan on home (RSSI only),
+  // or when the user taps "Connect to Boat (BLE)".
   const [bleManager, setBleManager] = useState(null);
   const bleManagerRef = useRef(null);
 
@@ -217,6 +219,63 @@ export default function App() {
     }, 2000);
     return () => clearInterval(id);
   }, [connectionMode, device, isConnected, bleManager]);
+
+  // Passive RSSI on home (scan only, no connect): 2nd app launch onward, after a delay — not on first install/open.
+  useEffect(() => {
+    if (currentScreen !== 'home' || isConnected || isScanning) return undefined;
+    let cancelled = false;
+    let delayTimer = null;
+    let stopTimer = null;
+
+    (async () => {
+      try {
+        const prev = await AsyncStorage.getItem(STORAGE.APP_OPENED_BEFORE);
+        if (prev !== '1') {
+          await AsyncStorage.setItem(STORAGE.APP_OPENED_BEFORE, '1');
+          return;
+        }
+      } catch {
+        return;
+      }
+
+      delayTimer = setTimeout(async () => {
+        if (cancelled) return;
+        let mgr;
+        try {
+          mgr = await ensureBleManager();
+        } catch {
+          return;
+        }
+        if (cancelled) return;
+        mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+          if (cancelled || error || !dev) return;
+          if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
+            setScanRssi(dev.rssi);
+          }
+        });
+        stopTimer = setTimeout(() => {
+          try {
+            mgr.stopDeviceScan();
+          } catch (_) {
+            /* ignore */
+          }
+        }, 12000);
+      }, 2800);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (delayTimer) clearTimeout(delayTimer);
+      if (stopTimer) clearTimeout(stopTimer);
+      if (bleManagerRef.current) {
+        try {
+          bleManagerRef.current.stopDeviceScan();
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    };
+  }, [currentScreen, isConnected, isScanning, ensureBleManager]);
 
   useEffect(() => {
     if (connectionMode !== 'wifi' || !wifiBase || !isConnected) {

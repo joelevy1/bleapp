@@ -4,6 +4,9 @@
 name: EAS iOS build
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       profile:
@@ -21,6 +24,8 @@ concurrency:
 
 jobs:
   build:
+    # Auto-builds on push use profile "preview" unless you use Run workflow. Skip with "[skip eas]" in commit message.
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip eas]') }}
     runs-on: ubuntu-latest
     # Opt into Node 24 for actions that still bundle a JS runtime (see GitHub Actions Node deprecation).
     env:
@@ -41,4 +46,4 @@ jobs:
       - name: Submit iOS build to EAS
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build --platform ios --profile "${{ github.event.inputs.profile }}" --non-interactive --no-wait
+        run: npx eas-cli@latest build --platform ios --profile "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile || 'preview' }}" --non-interactive --no-wait

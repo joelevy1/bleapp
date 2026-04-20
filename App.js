@@ -15,8 +15,6 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import Svg, { Polygon } from 'react-native-svg';
-import { BleManager } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 import { useWatchSync } from './watchSync';
 
@@ -53,37 +51,46 @@ function normalizeWifiBase(ip) {
   return s.replace(/^https?:\/\//i, '').replace(/\/$/, '');
 }
 
+/** Pure RN (no react-native-svg) so the SVG native module is not loaded at startup. */
 function StopSignOctagon({ size = 48 }) {
-  const cx = size / 2;
-  const cy = size / 2;
-  const r = size * 0.42;
-  const pts = [];
-  for (let i = 0; i < 8; i += 1) {
-    const a = Math.PI / 8 + (i * Math.PI) / 4;
-    pts.push(`${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`);
-  }
   return (
     <View
-      style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size * 0.12,
+        backgroundColor: '#D32F2F',
+        borderWidth: 2,
+        borderColor: '#B71C1C',
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}
       accessibilityLabel="Disconnect"
       accessibilityRole="button"
     >
-      <Svg width={size} height={size} style={{ position: 'absolute' }}>
-        <Polygon points={pts.join(' ')} fill="#D32F2F" stroke="#B71C1C" strokeWidth={1} />
-      </Svg>
       <Text style={{ fontSize: size * 0.2, fontWeight: '900', color: '#FFEBEE' }}>STOP</Text>
     </View>
   );
 }
 
 export default function App() {
-  // Defer BleManager construction until after mount — synchronous init can crash on some iOS builds.
+  // Load react-native-ble-plx only after mount — static import links native BLE at bundle eval time.
   const [bleManager, setBleManager] = useState(null);
   useEffect(() => {
-    const mgr = new BleManager();
-    setBleManager(mgr);
+    let mgr;
+    let cancelled = false;
+    import('react-native-ble-plx')
+      .then(({ BleManager }) => {
+        if (cancelled) return;
+        mgr = new BleManager();
+        setBleManager(mgr);
+      })
+      .catch((e) => {
+        console.warn('[BLE] failed to load BleManager', e);
+      });
     return () => {
-      void mgr.destroy();
+      cancelled = true;
+      if (mgr) void mgr.destroy();
     };
   }, []);
   const [connectionMode, setConnectionMode] = useState(null);

@@ -45,7 +45,7 @@ const styles = StyleSheet.create({
   errorWrap: { flex: 1, padding: 16, paddingTop: 48, backgroundColor: '#fff' },
   errorTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, color: '#b71c1c' },
   errorScroll: { flex: 1 },
-  errorBody: { fontSize: 13, fontFamily: 'Courier', color: '#333' },
+  errorBody: { fontSize: 13, color: '#333' },
 });
 
 /**

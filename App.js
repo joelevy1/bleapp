@@ -12,6 +12,7 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  InteractionManager,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -70,7 +71,7 @@ function StopSignOctagon({ size = 48 }) {
       accessibilityLabel="Disconnect"
       accessibilityRole="button"
     >
-      <Text style={{ fontSize: size * 0.2, fontWeight: '900', color: '#FFEBEE' }}>STOP</Text>
+      <Text style={{ fontSize: size * 0.2, fontWeight: '700', color: '#FFEBEE' }}>STOP</Text>
     </View>
   );
 }
@@ -142,38 +143,41 @@ export default function App() {
   ];
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [ip, um, ppg, ppg2, tm] = await Promise.all([
-          AsyncStorage.getItem(STORAGE.WIFI_IP),
-          AsyncStorage.getItem(STORAGE.UNIT_MODE),
-          AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
-          AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
-          AsyncStorage.getItem(STORAGE.TANK_MAX),
-        ]);
-        if (ip) {
-          setWifiIpInput(ip);
-          setWifiBase(normalizeWifiBase(ip));
-        }
-        if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
-        if (ppg) {
-          const n = parseFloat(ppg, 10);
-          if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
-        }
-        if (ppg2) {
-          const n = parseFloat(ppg2, 10);
-          if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
-        }
-        if (tm) {
-          const o = JSON.parse(tm);
-          if (o && typeof o === 'object') {
-            setTankMaxValues((prev) => ({ ...prev, ...o }));
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        try {
+          const [ip, um, ppg, ppg2, tm] = await Promise.all([
+            AsyncStorage.getItem(STORAGE.WIFI_IP),
+            AsyncStorage.getItem(STORAGE.UNIT_MODE),
+            AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
+            AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
+            AsyncStorage.getItem(STORAGE.TANK_MAX),
+          ]);
+          if (ip) {
+            setWifiIpInput(ip);
+            setWifiBase(normalizeWifiBase(ip));
           }
+          if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
+          if (ppg) {
+            const n = parseFloat(ppg, 10);
+            if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
+          }
+          if (ppg2) {
+            const n = parseFloat(ppg2, 10);
+            if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
+          }
+          if (tm) {
+            const o = JSON.parse(tm);
+            if (o && typeof o === 'object') {
+              setTankMaxValues((prev) => ({ ...prev, ...o }));
+            }
+          }
+        } catch (e) {
+          // ignore
         }
-      } catch (e) {
-        // ignore
-      }
-    })();
+      })();
+    });
+    return () => task.cancel();
   }, []);
 
   const persistWifiIp = useCallback(async (v) => {
@@ -227,44 +231,49 @@ export default function App() {
     let delayTimer = null;
     let stopTimer = null;
 
-    (async () => {
-      try {
-        const prev = await AsyncStorage.getItem(STORAGE.APP_OPENED_BEFORE);
-        if (prev !== '1') {
-          await AsyncStorage.setItem(STORAGE.APP_OPENED_BEFORE, '1');
-          return;
-        }
-      } catch {
-        return;
-      }
-
-      delayTimer = setTimeout(async () => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
         if (cancelled) return;
-        let mgr;
         try {
-          mgr = await ensureBleManager();
+          const prev = await AsyncStorage.getItem(STORAGE.APP_OPENED_BEFORE);
+          if (prev !== '1') {
+            await AsyncStorage.setItem(STORAGE.APP_OPENED_BEFORE, '1');
+            return;
+          }
         } catch {
           return;
         }
+
         if (cancelled) return;
-        mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
-          if (cancelled || error || !dev) return;
-          if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
-            setScanRssi(dev.rssi);
-          }
-        });
-        stopTimer = setTimeout(() => {
+        delayTimer = setTimeout(async () => {
+          if (cancelled) return;
+          let mgr;
           try {
-            mgr.stopDeviceScan();
-          } catch (_) {
-            /* ignore */
+            mgr = await ensureBleManager();
+          } catch {
+            return;
           }
-        }, 12000);
-      }, 2800);
-    })();
+          if (cancelled) return;
+          mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+            if (cancelled || error || !dev) return;
+            if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
+              setScanRssi(dev.rssi);
+            }
+          });
+          stopTimer = setTimeout(() => {
+            try {
+              mgr.stopDeviceScan();
+            } catch (_) {
+              /* ignore */
+            }
+          }, 12000);
+        }, 2800);
+      })();
+    });
 
     return () => {
       cancelled = true;
+      task.cancel();
       if (delayTimer) clearTimeout(delayTimer);
       if (stopTimer) clearTimeout(stopTimer);
       if (bleManagerRef.current) {
@@ -924,7 +933,7 @@ export default function App() {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>🚤 Ballast Monitor</Text>
+          <Text style={styles.headerTitle}>Ballast Monitor</Text>
         </View>
         <View style={styles.connectScreen}>
           <View style={styles.photoCircle}>
@@ -1012,7 +1021,7 @@ export default function App() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header} accessibilityRole="header">
-          <Text style={styles.headerTitle}>⚙️ Settings</Text>
+          <Text style={styles.headerTitle}>Settings</Text>
         </View>
         <ScrollView style={styles.settingsScroll} contentContainerStyle={styles.settingsScrollContent}>
           <Text style={styles.sectionTitle}>System</Text>
@@ -1158,7 +1167,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>🚤 Ballast Monitor</Text>
+        <Text style={styles.headerTitle}>Ballast Monitor</Text>
         <Text style={styles.headerSignal}>
           {connectionMode === 'wifi'
             ? `WiFi • ${wifiPollError ? 'poll error' : 'connected'}`
@@ -1259,7 +1268,7 @@ export default function App() {
 
       <View style={styles.bottomBar}>
         <TouchableOpacity style={styles.settingsButton} onPress={() => setCurrentScreen('settings')}>
-          <Text style={styles.settingsIcon}>⚙️</Text>
+          <Text style={styles.settingsIcon}>Settings</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.disconnectButton} onPress={disconnect}>
           <StopSignOctagon size={48} />

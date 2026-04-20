@@ -9,8 +9,10 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Cursor
-.cursor/
+# Cursor (keep shared rules; ignore local junk)
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 
 # Native
 .kotlin/

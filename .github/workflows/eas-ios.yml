@@ -1,5 +1,11 @@
 # Submits EAS iOS builds from GitHub (Linux runner — avoids Windows EPERM on upload).
 # Requires repo secret: EXPO_TOKEN (https://expo.dev/account → Access tokens)
+#
+# One-time setup (approval before EAS spends a credit):
+#   Repo → Settings → Environments → New environment name: eas-build
+#   → Required reviewers → add yourself (and anyone else who may approve).
+#   Until you approve a pending deployment, the job does not run (no npm ci / no eas submit).
+#   If the environment does not exist yet, create it before relying on the gate.
 
 name: EAS iOS build
 
@@ -24,7 +30,9 @@ concurrency:
 
 jobs:
   build:
-    # Push → preview. Manual → chosen profile. To skip a push build only, put [no-eas] in the commit message (do not use [skip eas] in titles — it matched our own docs and skipped the job).
+    # Wait for GitHub deployment approval (see eas-build environment) before any step runs.
+    environment: eas-build
+    # Push → preview. Manual → chosen profile. Put [no-eas] in the commit message to skip queueing this workflow on push (docs-only).
     if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[no-eas]') }}
     runs-on: ubuntu-latest
     # Opt into Node 24 for actions that still bundle a JS runtime (see GitHub Actions Node deprecation).

@@ -1,0 +1,12 @@
+---
+description: EAS iOS builds cost credits — confirm before triggering
+alwaysApply: true
+---
+
+# EAS / GitHub Actions iOS builds (credits)
+
+- **Before** creating a situation that spends an Expo/EAS build credit, **ask the user clearly** (e.g. “This will queue an EAS iOS build after you approve in GitHub — OK?”).
+- Do **not** `git push` to `main` to trigger a build, and do **not** tell them to click **Run workflow**, until they answer **yes** (or equivalent).
+- After they say **yes once** for that change, complete the agreed steps in one go (push and/or give the exact GitHub Actions link) **without asking again** for the same action.
+- If the user declines or is unsure, use **`[no-eas]`** in the commit message when pushing to `main` so the workflow does not queue a build (docs-only / no credit).
+- Remind them: with the `eas-build` environment, GitHub may also require **Approve** on the deployment before the job runs — that is separate from chat consent.

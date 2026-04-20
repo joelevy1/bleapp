@@ -74,23 +74,26 @@ function StopSignOctagon({ size = 48 }) {
 }
 
 export default function App() {
-  // Load react-native-ble-plx only after mount — static import links native BLE at bundle eval time.
+  // Do NOT create BleManager on launch — iOS can fault in CoreBluetooth during init (see BlePlxQueue in .ips).
+  // Load react-native-ble-plx only when the user taps "Connect to Boat (BLE)".
   const [bleManager, setBleManager] = useState(null);
+  const bleManagerRef = useRef(null);
+
+  const ensureBleManager = useCallback(async () => {
+    if (bleManagerRef.current) return bleManagerRef.current;
+    const { BleManager } = await import('react-native-ble-plx');
+    const mgr = new BleManager();
+    bleManagerRef.current = mgr;
+    setBleManager(mgr);
+    return mgr;
+  }, []);
+
   useEffect(() => {
-    let mgr;
-    let cancelled = false;
-    import('react-native-ble-plx')
-      .then(({ BleManager }) => {
-        if (cancelled) return;
-        mgr = new BleManager();
-        setBleManager(mgr);
-      })
-      .catch((e) => {
-        console.warn('[BLE] failed to load BleManager', e);
-      });
     return () => {
-      cancelled = true;
-      if (mgr) void mgr.destroy();
+      if (bleManagerRef.current) {
+        void bleManagerRef.current.destroy();
+        bleManagerRef.current = null;
+      }
     };
   }, []);
   const [connectionMode, setConnectionMode] = useState(null);
@@ -273,16 +276,19 @@ export default function App() {
   };
 
   const scanAndConnect = async () => {
-    if (!bleManager) {
-      Alert.alert('Please wait', 'Bluetooth is still starting. Try again in a moment.');
+    let mgr;
+    try {
+      mgr = await ensureBleManager();
+    } catch (e) {
+      Alert.alert('Bluetooth', `Could not start Bluetooth: ${String(e?.message || e)}`);
       return;
     }
     setIsScanning(true);
     try {
-      const subscription = bleManager.onStateChange((state) => {
+      const subscription = mgr.onStateChange((state) => {
         if (state === 'PoweredOn') {
           subscription.remove();
-          startScan();
+          startScan(mgr);
         } else if (state === 'Unsupported' || state === 'Unauthorized') {
           subscription.remove();
           setIsScanning(false);
@@ -305,12 +311,12 @@ export default function App() {
     }
   };
 
-  const startScan = () => {
+  const startScan = (mgr) => {
     setScanRssi(null);
     let found = false;
-    bleManager.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+    mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
       if (error) {
-        bleManager.stopDeviceScan();
+        mgr.stopDeviceScan();
         setIsScanning(false);
         Alert.alert('Scan Error', error.message);
         return;
@@ -320,14 +326,14 @@ export default function App() {
         if (Number.isFinite(dev.rssi)) setScanRssi(dev.rssi);
         if (!found) {
           found = true;
-          bleManager.stopDeviceScan();
+          mgr.stopDeviceScan();
           connectToDevice(dev);
         }
       }
     });
     setTimeout(() => {
       if (!found) {
-        bleManager.stopDeviceScan();
+        mgr.stopDeviceScan();
         setIsScanning(false);
         setScanRssi(null);
         Alert.alert('Not Found', 'Ballast Monitor not found');

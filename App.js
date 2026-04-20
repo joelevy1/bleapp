@@ -77,7 +77,15 @@ function StopSignOctagon({ size = 48 }) {
 }
 
 export default function App() {
-  const [bleManager] = useState(() => new BleManager());
+  // Defer BleManager construction until after mount — synchronous init can crash on some iOS builds.
+  const [bleManager, setBleManager] = useState(null);
+  useEffect(() => {
+    const mgr = new BleManager();
+    setBleManager(mgr);
+    return () => {
+      void mgr.destroy();
+    };
+  }, []);
   const [connectionMode, setConnectionMode] = useState(null);
   const [device, setDevice] = useState(null);
   const [scannedDevice, setScannedDevice] = useState(null);
@@ -181,7 +189,7 @@ export default function App() {
   }, [unitMode, pulsesPerGallon, poundsPerGallon, tankMaxValues]);
 
   useEffect(() => {
-    if (connectionMode !== 'ble' || !device || !isConnected) return undefined;
+    if (!bleManager || connectionMode !== 'ble' || !device || !isConnected) return undefined;
     const id = setInterval(async () => {
       try {
         const d = await device.readRSSI();
@@ -258,6 +266,10 @@ export default function App() {
   };
 
   const scanAndConnect = async () => {
+    if (!bleManager) {
+      Alert.alert('Please wait', 'Bluetooth is still starting. Try again in a moment.');
+      return;
+    }
     setIsScanning(true);
     try {
       const subscription = bleManager.onStateChange((state) => {
@@ -874,7 +886,7 @@ export default function App() {
             <TouchableOpacity
               style={styles.cancelButton}
               onPress={() => {
-                bleManager.stopDeviceScan();
+                bleManager?.stopDeviceScan();
                 setIsScanning(false);
                 setScanRssi(null);
               }}

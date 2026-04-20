@@ -12,6 +12,8 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  Platform,
+  InteractionManager,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -19,6 +21,11 @@ import { Buffer } from 'buffer';
 import { useWatchSync } from './watchSync';
 
 global.Buffer = Buffer;
+
+/** iOS 26: numeric fontWeight → UIFont.fontNamesForFamilyName / TSplicedFont path can fault in ShadowQueue (see device .ips). */
+const FW500 = Platform.OS === 'ios' ? {} : { fontWeight: '500' };
+const FW600 = Platform.OS === 'ios' ? {} : { fontWeight: '600' };
+const FW700 = Platform.OS === 'ios' ? {} : { fontWeight: '700' };
 
 const DEVICE_NAME = 'Ballast Monitor';
 const SERVICE_UUID = '0000181a-0000-1000-8000-00805f9b34fb';
@@ -68,7 +75,7 @@ function StopSignOctagon({ size = 48 }) {
       accessibilityLabel="Disconnect"
       accessibilityRole="button"
     >
-      <Text style={{ fontSize: size * 0.2, fontWeight: '700', color: '#FFEBEE' }}>STOP</Text>
+      <Text style={[{ fontSize: size * 0.2, color: '#FFEBEE' }, FW700]}>STOP</Text>
     </View>
   );
 }
@@ -140,38 +147,41 @@ export default function App() {
   ];
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [ip, um, ppg, ppg2, tm] = await Promise.all([
-          AsyncStorage.getItem(STORAGE.WIFI_IP),
-          AsyncStorage.getItem(STORAGE.UNIT_MODE),
-          AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
-          AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
-          AsyncStorage.getItem(STORAGE.TANK_MAX),
-        ]);
-        if (ip) {
-          setWifiIpInput(ip);
-          setWifiBase(normalizeWifiBase(ip));
-        }
-        if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
-        if (ppg) {
-          const n = parseFloat(ppg, 10);
-          if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
-        }
-        if (ppg2) {
-          const n = parseFloat(ppg2, 10);
-          if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
-        }
-        if (tm) {
-          const o = JSON.parse(tm);
-          if (o && typeof o === 'object') {
-            setTankMaxValues((prev) => ({ ...prev, ...o }));
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        try {
+          const [ip, um, ppg, ppg2, tm] = await Promise.all([
+            AsyncStorage.getItem(STORAGE.WIFI_IP),
+            AsyncStorage.getItem(STORAGE.UNIT_MODE),
+            AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
+            AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
+            AsyncStorage.getItem(STORAGE.TANK_MAX),
+          ]);
+          if (ip) {
+            setWifiIpInput(ip);
+            setWifiBase(normalizeWifiBase(ip));
           }
+          if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
+          if (ppg) {
+            const n = parseFloat(ppg, 10);
+            if (Number.isFinite(n) && n > 0) setPulsesPerGallon(n);
+          }
+          if (ppg2) {
+            const n = parseFloat(ppg2, 10);
+            if (Number.isFinite(n) && n > 0) setPoundsPerGallon(n);
+          }
+          if (tm) {
+            const o = JSON.parse(tm);
+            if (o && typeof o === 'object') {
+              setTankMaxValues((prev) => ({ ...prev, ...o }));
+            }
+          }
+        } catch (e) {
+          // ignore
         }
-      } catch (e) {
-        // ignore
-      }
-    })();
+      })();
+    });
+    return () => task.cancel();
   }, []);
 
   const persistWifiIp = useCallback(async (v) => {
@@ -1213,7 +1223,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   header: { backgroundColor: '#4CAF50', paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16, alignItems: 'center' },
-  headerTitle: { color: 'white', fontSize: 20, fontWeight: '500' },
+  headerTitle: { color: 'white', fontSize: 20, ...FW500 },
   headerSignal: { color: 'rgba(255,255,255,0.9)', fontSize: 11, marginTop: 4 },
   headerWarn: { color: '#FFEB3B', fontSize: 10, marginTop: 4, textAlign: 'center' },
   connectScreen: { flex: 1, padding: 24 },
@@ -1223,27 +1233,27 @@ const styles = StyleSheet.create({
   deviceCard: { backgroundColor: '#f5f5f5', borderRadius: 12, padding: 16, marginBottom: 16 },
   deviceText: { fontSize: 14, paddingVertical: 4 },
   connectButton: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
-  connectButtonText: { color: 'white', fontSize: 18, fontWeight: '500' },
+  connectButtonText: { color: 'white', fontSize: 18, ...FW500 },
   cancelButton: { padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' },
   cancelButtonText: { fontSize: 14 },
   wifiCornerBtn: { position: 'absolute', left: 16, bottom: 48, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#E8F5E9', borderRadius: 8, borderWidth: 1, borderColor: '#4CAF50' },
-  wifiCornerText: { color: '#2E7D32', fontWeight: '600' },
+  wifiCornerText: { color: '#2E7D32', ...FW600 },
   version: { position: 'absolute', bottom: 16, right: 16 },
   versionText: { fontSize: 11, color: '#999' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 },
   modalCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
-  modalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 8 },
+  modalTitle: { fontSize: 18, marginBottom: 8, ...FW600 },
   modalHint: { fontSize: 12, color: '#666', marginBottom: 8 },
   modalInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 12 },
   modalConnect: { backgroundColor: '#4CAF50', padding: 14, borderRadius: 8, alignItems: 'center' },
-  modalConnectText: { color: '#fff', fontWeight: '600' },
+  modalConnectText: { color: '#fff', ...FW600 },
   modalCancel: { padding: 12, alignItems: 'center' },
   modalCancelText: { color: '#666' },
   statusBar: { backgroundColor: '#f5f5f5', paddingVertical: 14, paddingHorizontal: 12 },
   fillDrainRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
   toggleButton: { paddingVertical: 10, paddingHorizontal: 28, backgroundColor: 'white', borderWidth: 2, borderColor: '#c8e6c9', marginHorizontal: 6, borderRadius: 10 },
   toggleActive: { backgroundColor: '#4CAF50', borderColor: '#2E7D32' },
-  toggleText: { fontSize: 15, fontWeight: '600', color: '#555' },
+  toggleText: { fontSize: 15, color: '#555', ...FW600 },
   toggleTextOn: { color: '#fff' },
   scrollView: { flex: 1 },
   tankGrid: { padding: 12, flexDirection: 'row', flexWrap: 'wrap' },
@@ -1252,9 +1262,9 @@ const styles = StyleSheet.create({
   miniToggle: { paddingVertical: 4, paddingHorizontal: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', marginHorizontal: 3, borderRadius: 6 },
   miniToggleOn: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
   miniToggleText: { fontSize: 11, color: '#666' },
-  miniToggleTextOn: { color: '#fff', fontWeight: '600' },
+  miniToggleTextOn: { color: '#fff', ...FW600 },
   tankTitleRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  tankName: { fontSize: 15, fontWeight: '600' },
+  tankName: { fontSize: 15, ...FW600 },
   tankPercent: { fontSize: 13, color: '#666' },
   pumpRow: { flexDirection: 'row', alignItems: 'stretch', marginBottom: 6 },
   pumpSemiReset: {
@@ -1273,7 +1283,7 @@ const styles = StyleSheet.create({
   },
   pumpMain: { flex: 1, backgroundColor: 'white', borderRadius: 8, padding: 8 },
   pumpLabel: { fontSize: 11, color: '#666' },
-  pumpValue: { fontSize: 16, fontWeight: '500', color: '#4CAF50', marginTop: 4 },
+  pumpValue: { fontSize: 16, color: '#4CAF50', marginTop: 4, ...FW500 },
   tankBottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 4 },
   tankWideReset: {
     flex: 1,
@@ -1292,7 +1302,7 @@ const styles = StyleSheet.create({
   setFullBtnText: { fontSize: 11, color: '#333' },
   totalCard: { margin: 12, backgroundColor: '#E3F2FD', borderRadius: 12, padding: 16, alignItems: 'center' },
   totalLabel: { fontSize: 13, color: '#1976D2', marginBottom: 4 },
-  totalValue: { fontSize: 28, fontWeight: '500', color: '#1565C0' },
+  totalValue: { fontSize: 28, color: '#1565C0', ...FW500 },
   resetAllBottom: { alignSelf: 'center', marginBottom: 20, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fafafa' },
   resetAllBottomText: { fontSize: 12, color: '#777' },
   bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#eee' },
@@ -1301,7 +1311,7 @@ const styles = StyleSheet.create({
   disconnectButton: { width: 52, height: 52, justifyContent: 'center', alignItems: 'center' },
   settingsScroll: { flex: 1 },
   settingsScrollContent: { padding: 16, paddingBottom: 40 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', marginTop: 16, marginBottom: 8, color: '#333' },
+  sectionTitle: { fontSize: 16, marginTop: 16, marginBottom: 8, color: '#333', ...FW600 },
   settingsText: { fontSize: 14, marginBottom: 6, color: '#444' },
   settingsInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 16 },
   inputLabel: { fontSize: 12, color: '#666', marginBottom: 4 },
@@ -1309,21 +1319,21 @@ const styles = StyleSheet.create({
   segmentBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fff', marginRight: 8, marginBottom: 8 },
   segmentBtnOn: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
   segmentBtnText: { fontSize: 13, color: '#555' },
-  segmentBtnTextOn: { color: '#fff', fontWeight: '600' },
+  segmentBtnTextOn: { color: '#fff', ...FW600 },
   tankMaxRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   tankMaxLabel: { width: 100, fontSize: 14 },
   tankMaxInput: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 8, fontSize: 15 },
   secondaryBtn: { marginTop: 8, padding: 12, backgroundColor: '#E3F2FD', borderRadius: 8, alignItems: 'center' },
   secondaryBtnDisabled: { opacity: 0.45 },
-  secondaryBtnText: { color: '#1565C0', fontWeight: '600' },
+  secondaryBtnText: { color: '#1565C0', ...FW600 },
   helpText: { fontSize: 13, color: '#666', marginBottom: 10, lineHeight: 18 },
   progressWrap: { marginVertical: 8 },
   progressBar: { height: 8, backgroundColor: '#eee', borderRadius: 4, overflow: 'hidden', marginTop: 6 },
   progressFill: { height: 8, backgroundColor: '#4CAF50' },
   saveButton: { backgroundColor: '#1565C0', padding: 16, borderRadius: 12, marginTop: 20, alignItems: 'center' },
-  saveButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
+  saveButtonText: { color: 'white', fontSize: 16, ...FW600 },
   closeButton: { backgroundColor: '#4CAF50', padding: 16, borderRadius: 12, marginTop: 12, alignItems: 'center' },
-  closeButtonText: { color: 'white', fontSize: 16, fontWeight: '500' },
+  closeButtonText: { color: 'white', fontSize: 16, ...FW500 },
   versionDetailCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, maxHeight: '80%', width: '100%' },
   versionDetailScroll: { maxHeight: 400 },
   versionDetailText: { fontSize: 11, color: '#333' },

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
 
@@ -44,7 +44,12 @@ class RootErrorBoundary extends React.Component {
 
 const styles = StyleSheet.create({
   errorWrap: { flex: 1, padding: 16, paddingTop: 48, backgroundColor: '#fff' },
-  errorTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12, color: '#b71c1c' },
+  errorTitle: {
+    fontSize: 18,
+    marginBottom: 12,
+    color: '#b71c1c',
+    ...(Platform.OS === 'ios' ? {} : { fontWeight: '700' }),
+  },
   errorScroll: { flex: 1 },
   errorBody: { fontSize: 13, color: '#333' },
 });

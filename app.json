@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ballast Monitor",
     "slug": "ballast-monitor",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon-dogs.png",
     "userInterfaceStyle": "light",

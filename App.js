@@ -28,7 +28,10 @@ const FW500 = Platform.OS === 'ios' ? {} : { fontWeight: '500' };
 const FW600 = Platform.OS === 'ios' ? {} : { fontWeight: '600' };
 
 const DEVICE_NAME = 'Ballast Monitor';
+/** Environmental Sensing (custom flow/control/file transfer on Pico). */
 const SERVICE_UUID = '0000181a-0000-1000-8000-00805f9b34fb';
+/** Standard Device Information — Firmware Revision (0x2A26) is normally registered here, not under 0x181A. */
+const DEVICE_INFO_SERVICE_UUID = '0000180a-0000-1000-8000-00805f9b34fb';
 const FLOW_CHAR_UUID = '00002a6e-0000-1000-8000-00805f9b34fb';
 const CONTROL_CHAR_UUID = '00002a6f-0000-1000-8000-00805f9b34fb';
 const VERSION_CHAR_UUID = '00002a26-0000-1000-8000-00805f9b34fb';
@@ -37,7 +40,16 @@ const FILE_CONTROL_UUID = '00002a6c-0000-1000-8000-00805f9b34fb';
 
 const GITHUB_COMMITS_URL = 'https://api.github.com/repos/joelevy1/ballast/commits/main';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/joelevy1/ballast/main';
-const OTA_FILES = ['main.py', 'ble_service.py', 'config.py', 'flow_meters.py', 'ble_advertising.py'];
+const OTA_FILES = [
+  'main.py',
+  'main_wifi.py',
+  'ble_service.py',
+  'config.py',
+  'flow_meters.py',
+  'ble_advertising.py',
+];
+/** Optional tiny manifest on `main` in the ballast repo — fast compare without downloading full sources. */
+const FIRMWARE_MANIFEST_URL = `${GITHUB_RAW_BASE}/firmware_versions.json`;
 
 const APP_VERSION =
   Constants.expoConfig?.version ?? Constants.manifest2?.extra?.expoClient?.version ?? '1.0.0';
@@ -56,6 +68,93 @@ function normalizeWifiBase(ip) {
   const s = String(ip || '').trim();
   if (!s) return '';
   return s.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+}
+
+/**
+ * Manifest shape (commit to ballast repo as firmware_versions.json):
+ * - `{ "release": "4-19-2026-v1.3" }` — same label used for every row, or
+ * - `{ "files": { "main.py": "…", … } }` — per-file strings (optional `release` fallback).
+ */
+function manifestIsUsable(m) {
+  if (!m || typeof m !== 'object') return false;
+  if (String(m.release ?? m.bundle_version ?? '').trim()) return true;
+  if (m.files && typeof m.files === 'object') {
+    return OTA_FILES.some((fn) => m.files[fn] != null && String(m.files[fn]).trim());
+  }
+  return false;
+}
+
+function rowStatusDeviceVsRef(deviceLine, ref) {
+  if (!deviceLine || !ref) return 'unknown';
+  const dl = deviceLine.trim();
+  const refS = String(ref).trim();
+  const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
+  const byToken = tokens.some((t) => t.length >= 3 && refS.includes(t));
+  const byPrefix = dl.length >= 6 && refS.includes(dl.slice(0, Math.min(24, dl.length)));
+  const revTokens = refS.split(/[\s/_-]+/).filter((t) => t.length >= 2);
+  const byRevInDevice = revTokens.some((t) => t.length >= 3 && dl.includes(t));
+  return byToken || byPrefix || byRevInDevice ? 'ok' : 'stale';
+}
+
+/** Avoids multi‑minute hangs when the saved IP is wrong or the Pico is unreachable (not a BLE limitation). */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** ble-plx gives Base64; Pico sends UTF-8 (e.g. 4-18-2026-v1.2). */
+function decodeBleCharacteristicUtf8(value) {
+  if (value == null || value === '') return '';
+  const s = String(value).trim();
+  try {
+    const buf = Buffer.from(s, 'base64');
+    const out = buf.toString('utf-8').replace(/\0/g, '').trim();
+    if (out.length > 0) return out;
+  } catch (_) {
+    /* fall through */
+  }
+  if (/^[\w.\-:\s/]+$/.test(s) && s.length < 80) return s.replace(/\0/g, '').trim();
+  return '';
+}
+
+async function readBleFirmwareRevision(device) {
+  const tryOnce = async (serviceUuid) => {
+    let ch = await device.readCharacteristicForService(serviceUuid, VERSION_CHAR_UUID);
+    let raw = ch?.value;
+    let text = decodeBleCharacteristicUtf8(raw);
+    if (!text && ch && typeof ch.read === 'function') {
+      try {
+        ch = await ch.read();
+        raw = ch?.value;
+        text = decodeBleCharacteristicUtf8(raw);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return text;
+  };
+
+  // 0x2A26 is the standard Firmware Revision characteristic; it usually lives under Device Information (0x180A).
+  const services = [DEVICE_INFO_SERVICE_UUID, SERVICE_UUID];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    for (const svc of services) {
+      try {
+        const text = await tryOnce(svc);
+        if (text) return text;
+      } catch (_) {
+        /* try next service / attempt */
+      }
+    }
+  }
+  return '';
 }
 
 export default function App() {
@@ -91,7 +190,8 @@ export default function App() {
   const [unitMode, setUnitMode] = useState('gallons');
   const [pulsesPerGallon, setPulsesPerGallon] = useState(450);
   const [poundsPerGallon, setPoundsPerGallon] = useState(8.34);
-  const [picoVersion, setPicoVersion] = useState('Unknown');
+  const [picoVersion, setPicoVersion] = useState('');
+  const [settingsVersionLoading, setSettingsVersionLoading] = useState(false);
   const [signalStrength, setSignalStrength] = useState(null);
   const [tankMaxValues, setTankMaxValues] = useState({
     port: 10000,
@@ -175,33 +275,93 @@ export default function App() {
     await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(next));
   }, []);
 
+  /** Apply JSON from GET /api/settings or `settings` on GET /api/info (Pico `ballast_settings.json`). */
+  const applySettingsFromPico = useCallback((s) => {
+    if (!s || typeof s !== 'object') return;
+    const um = s.unit_mode;
+    if (um === 'counter' || um === 'gallons' || um === 'pounds') setUnitMode(um);
+    const ppg = Number(s.pulses_per_gallon);
+    if (Number.isFinite(ppg) && ppg > 0) setPulsesPerGallon(ppg);
+    const ppg2 = Number(s.pounds_per_gallon);
+    if (Number.isFinite(ppg2) && ppg2 > 0) setPoundsPerGallon(ppg2);
+    if (s.tank_max && typeof s.tank_max === 'object') {
+      const tm = s.tank_max;
+      setTankMaxValues((prev) => ({
+        port: Number(tm.port) > 0 ? Number(tm.port) : prev.port,
+        starboard: Number(tm.starboard) > 0 ? Number(tm.starboard) : prev.starboard,
+        mid: Number(tm.mid) > 0 ? Number(tm.mid) : prev.mid,
+        forward: Number(tm.forward) > 0 ? Number(tm.forward) : prev.forward,
+      }));
+    }
+    if (typeof s.is_fill_mode === 'boolean') setIsFillMode(s.is_fill_mode);
+    if (s.tank_fill && typeof s.tank_fill === 'object') {
+      const tf = s.tank_fill;
+      setTankFillModes((prev) => ({
+        Port: tf.Port !== undefined ? Boolean(tf.Port) : prev.Port,
+        Starboard: tf.Starboard !== undefined ? Boolean(tf.Starboard) : prev.Starboard,
+        Mid: tf.Mid !== undefined ? Boolean(tf.Mid) : prev.Mid,
+        Forward: tf.Forward !== undefined ? Boolean(tf.Forward) : prev.Forward,
+      }));
+    }
+  }, []);
+
   const saveSettingsToStorage = useCallback(async () => {
     try {
       await AsyncStorage.setItem(STORAGE.UNIT_MODE, unitMode);
       await AsyncStorage.setItem(STORAGE.PULSES_PER_GAL, String(pulsesPerGallon));
       await AsyncStorage.setItem(STORAGE.POUNDS_PER_GAL, String(poundsPerGallon));
       await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(tankMaxValues));
-      Alert.alert('Saved', 'Settings were saved to this phone.');
+      if (connectionMode === 'wifi' && wifiBase) {
+        const res = await fetchWithTimeout(
+          `http://${wifiBase}/api/settings`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              unit_mode: unitMode,
+              pulses_per_gallon: pulsesPerGallon,
+              pounds_per_gallon: poundsPerGallon,
+              tank_max: tankMaxValues,
+              is_fill_mode: isFillMode,
+              tank_fill: tankFillModes,
+            }),
+          },
+          12000,
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      }
+      Alert.alert(
+        'Saved',
+        connectionMode === 'wifi' && wifiBase
+          ? 'Settings saved on this phone and on the Pico.'
+          : 'Settings saved on this phone. Connect via Wi‑Fi to sync calibration to the Pico.',
+      );
     } catch (e) {
       Alert.alert('Save failed', String(e.message || e));
     }
-  }, [unitMode, pulsesPerGallon, poundsPerGallon, tankMaxValues]);
+  }, [
+    unitMode,
+    pulsesPerGallon,
+    poundsPerGallon,
+    tankMaxValues,
+    connectionMode,
+    wifiBase,
+    isFillMode,
+    tankFillModes,
+  ]);
 
-  /** BLE version char or WiFi /api/info; returns version string or null. */
+  /** BLE firmware-revision char or WiFi GET /api/info → Pico firmware string (e.g. 4-18-2026-v1.2). */
   const fetchPicoVersionNow = useCallback(async () => {
     try {
       if (connectionMode === 'ble' && device) {
-        const versionChar = await device.readCharacteristicForService(SERVICE_UUID, VERSION_CHAR_UUID);
-        if (versionChar?.value) {
-          const v = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
-          if (v) {
-            setPicoVersion(v);
-            return v;
-          }
+        const v = await readBleFirmwareRevision(device);
+        if (v) {
+          setPicoVersion(v);
+          return v;
         }
       }
       if (connectionMode === 'wifi' && wifiBase) {
-        const res = await fetch(`http://${wifiBase}/api/info`, { method: 'GET' });
+        const res = await fetchWithTimeout(`http://${wifiBase}/api/info`, { method: 'GET' }, 6000);
         if (res.ok) {
           const info = await res.json();
           const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
@@ -295,8 +455,8 @@ export default function App() {
       const base = `http://${wifiBase}`;
       try {
         const [pulsesRes, infoRes] = await Promise.all([
-          fetch(`${base}/api/pulses`, { method: 'GET' }),
-          fetch(`${base}/api/info`, { method: 'GET' }).catch(() => null),
+          fetchWithTimeout(`${base}/api/pulses`, { method: 'GET' }, 8000),
+          fetchWithTimeout(`${base}/api/info`, { method: 'GET' }, 8000).catch(() => null),
         ]);
         if (!pulsesRes.ok) throw new Error(`HTTP ${pulsesRes.status}`);
         const data = await pulsesRes.json();
@@ -309,6 +469,19 @@ export default function App() {
             const info = await infoRes.json();
             const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
             if (v) setPicoVersion(v);
+            const st = info.settings;
+            if (st && typeof st === 'object') {
+              if (typeof st.is_fill_mode === 'boolean') setIsFillMode(st.is_fill_mode);
+              if (st.tank_fill && typeof st.tank_fill === 'object') {
+                const tf = st.tank_fill;
+                setTankFillModes((prev) => ({
+                  Port: tf.Port !== undefined ? Boolean(tf.Port) : prev.Port,
+                  Starboard: tf.Starboard !== undefined ? Boolean(tf.Starboard) : prev.Starboard,
+                  Mid: tf.Mid !== undefined ? Boolean(tf.Mid) : prev.Mid,
+                  Forward: tf.Forward !== undefined ? Boolean(tf.Forward) : prev.Forward,
+                }));
+              }
+            }
           } catch (_) {
             /* ignore */
           }
@@ -328,28 +501,37 @@ export default function App() {
   useEffect(() => {
     if (currentScreen !== 'settings') return undefined;
     let cancelled = false;
+    setSettingsVersionLoading(true);
     (async () => {
-      let v = await fetchPicoVersionNow();
-      if (cancelled) return;
-      if (!v) {
-        const ip = normalizeWifiBase(wifiIpInput);
-        if (ip) {
-          try {
-            const res = await fetch(`http://${ip}/api/info`, { method: 'GET' });
-            if (cancelled || !res.ok) return;
-            const info = await res.json();
-            const ver = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
-            if (ver) setPicoVersion(ver);
-          } catch (_) {
-            /* ignore */
+      try {
+        let v = await fetchPicoVersionNow();
+        if (cancelled) return;
+        if (!v && connectionMode === 'ble' && device) {
+          v = await readBleFirmwareRevision(device);
+          if (v) setPicoVersion(v);
+        }
+        if (!v) {
+          const ip = normalizeWifiBase(wifiIpInput);
+          if (ip) {
+            try {
+              const res = await fetchWithTimeout(`http://${ip}/api/info`, { method: 'GET' }, 6000);
+              if (cancelled || !res.ok) return;
+              const info = await res.json();
+              const ver = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
+              if (ver) setPicoVersion(ver);
+            } catch (_) {
+              /* ignore */
+            }
           }
         }
+      } finally {
+        if (!cancelled) setSettingsVersionLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [currentScreen, fetchPicoVersionNow, wifiIpInput]);
+  }, [currentScreen, fetchPicoVersionNow, wifiIpInput, connectionMode, device]);
 
   const getSignalQuality = (rssi) => {
     if (!Number.isFinite(rssi)) return { bars: '○○○○○', text: 'No Signal' };
@@ -434,14 +616,8 @@ export default function App() {
       await connectedDevice.discoverAllServicesAndCharacteristics();
 
       try {
-        const versionChar = await connectedDevice.readCharacteristicForService(
-          SERVICE_UUID,
-          VERSION_CHAR_UUID,
-        );
-        if (versionChar?.value) {
-          const version = Buffer.from(versionChar.value, 'base64').toString('utf-8').replace(/\0/g, '').trim();
-          if (version) setPicoVersion(version);
-        }
+        const version = await readBleFirmwareRevision(connectedDevice);
+        if (version) setPicoVersion(version);
       } catch (e) {
         // ignore
       }
@@ -486,7 +662,7 @@ export default function App() {
     try {
       let pulsesArr = null;
       let versionLabel = '';
-      const infoRes = await fetch(`http://${base}/api/info`, { method: 'GET' });
+      const infoRes = await fetchWithTimeout(`http://${base}/api/info`, { method: 'GET' }, 6000);
       if (infoRes.ok) {
         const info = await infoRes.json();
         const arr = info.pulses || info.values;
@@ -497,7 +673,7 @@ export default function App() {
       }
       if (!pulsesArr) {
         const url = `http://${base}/api/pulses`;
-        const res = await fetch(url, { method: 'GET' });
+        const res = await fetchWithTimeout(url, { method: 'GET' }, 8000);
         if (!res.ok) {
           Alert.alert(
             'WiFi',
@@ -520,10 +696,29 @@ export default function App() {
       setDevice(null);
       setSignalStrength(null);
       setWifiPollError(null);
-      setPicoVersion(versionLabel || 'Unknown');
+      setPicoVersion(versionLabel || '');
       setIsConnected(true);
       setWifiModalVisible(false);
       setCurrentScreen('main');
+      try {
+        const sr = await fetchWithTimeout(`http://${base}/api/settings`, { method: 'GET' }, 6000);
+        if (sr.ok) {
+          const remote = await sr.json();
+          applySettingsFromPico(remote);
+          const um =
+            remote.unit_mode === 'counter' || remote.unit_mode === 'gallons' || remote.unit_mode === 'pounds'
+              ? remote.unit_mode
+              : 'gallons';
+          await AsyncStorage.setItem(STORAGE.UNIT_MODE, um);
+          await AsyncStorage.setItem(STORAGE.PULSES_PER_GAL, String(remote.pulses_per_gallon ?? 450));
+          await AsyncStorage.setItem(STORAGE.POUNDS_PER_GAL, String(remote.pounds_per_gallon ?? 8.34));
+          if (remote.tank_max && typeof remote.tank_max === 'object') {
+            await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(remote.tank_max));
+          }
+        }
+      } catch (_) {
+        /* Pico may run older main_wifi without /api/settings */
+      }
     } catch (e) {
       Alert.alert('WiFi', String(e.message || e));
     }
@@ -550,6 +745,7 @@ export default function App() {
     setSignalStrength(null);
     setWifiPollError(null);
     setScanRssi(null);
+    setPicoVersion('');
   };
 
   const getTankTotalPulses = (tankName) => {
@@ -609,11 +805,15 @@ export default function App() {
 
   const wifiPostForm = async (path, body) => {
     const base = `http://${wifiBase}`;
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body || '',
-    });
+    const res = await fetchWithTimeout(
+      `${base}${path}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body || '',
+      },
+      12000,
+    );
     return res;
   };
 
@@ -696,13 +896,13 @@ export default function App() {
   };
 
   const fetchGithubLatestCommit = async () => {
-    const res = await fetch(GITHUB_COMMITS_URL);
+    const res = await fetchWithTimeout(GITHUB_COMMITS_URL, {}, 15000);
     if (!res.ok) throw new Error(`GitHub ${res.status}`);
     return res.json();
   };
 
   const fetchGithubRawFile = async (name) => {
-    const res = await fetch(`${GITHUB_RAW_BASE}/${name}`);
+    const res = await fetchWithTimeout(`${GITHUB_RAW_BASE}/${name}`, {}, 15000);
     if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
     return res.text();
   };
@@ -883,11 +1083,18 @@ export default function App() {
       let deviceLine = String(picoVersion ?? '').replace(/\0/g, '').trim();
       const fresh = await fetchPicoVersionNow();
       if (fresh) deviceLine = fresh;
-      if (!deviceLine || deviceLine === 'Unknown') {
+      if (!deviceLine && connectionMode === 'ble' && device) {
+        const v = await readBleFirmwareRevision(device);
+        if (v) {
+          setPicoVersion(v);
+          deviceLine = v;
+        }
+      }
+      if (!deviceLine) {
         const ip = normalizeWifiBase(wifiIpInput);
         if (ip) {
           try {
-            const res = await fetch(`http://${ip}/api/info`, { method: 'GET' });
+            const res = await fetchWithTimeout(`http://${ip}/api/info`, { method: 'GET' }, 6000);
             if (res.ok) {
               const info = await res.json();
               const v = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
@@ -901,22 +1108,53 @@ export default function App() {
           }
         }
       }
-      const rows = [];
-      for (let i = 0; i < OTA_FILES.length; i += 1) {
-        const fn = OTA_FILES[i];
-        const text = await fetchGithubRawFile(fn);
-        const head = text.split('\n').slice(0, 50).join('\n');
-        const hint = text.split('\n').find((l) => l.trim()) || '';
-        const shortHint = hint.trim().slice(0, 80);
-        let status = 'unknown';
-        if (deviceLine && deviceLine !== 'Unknown') {
-          const dl = deviceLine.trim();
-          const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
-          const byToken = tokens.some((t) => t.length >= 3 && head.includes(t));
-          const byPrefix = dl.length >= 6 && head.includes(dl.slice(0, Math.min(24, dl.length)));
-          status = byToken || byPrefix ? 'ok' : 'stale';
+
+      let manifest = null;
+      try {
+        const mRes = await fetchWithTimeout(FIRMWARE_MANIFEST_URL, {}, 8000);
+        if (mRes.ok) {
+          try {
+            manifest = await mRes.json();
+          } catch (_) {
+            manifest = null;
+          }
         }
-        rows.push({ fn, status, hint: shortHint });
+      } catch (_) {
+        manifest = null;
+      }
+
+      let rows;
+      if (manifestIsUsable(manifest)) {
+        const fallbackRelease = String(manifest.release ?? manifest.bundle_version ?? '')
+          .replace(/\0/g, '')
+          .trim();
+        rows = OTA_FILES.map((fn) => {
+          let ref = '';
+          if (manifest.files && typeof manifest.files === 'object' && manifest.files[fn] != null) {
+            ref = String(manifest.files[fn]).replace(/\0/g, '').trim();
+          } else {
+            ref = fallbackRelease;
+          }
+          const status = rowStatusDeviceVsRef(deviceLine, ref);
+          return { fn, status, hint: ref ? ref.slice(0, 80) : '—' };
+        });
+      } else {
+        const fileTexts = await Promise.all(OTA_FILES.map((fn) => fetchGithubRawFile(fn)));
+        rows = OTA_FILES.map((fn, i) => {
+          const text = fileTexts[i];
+          const head = text.split('\n').slice(0, 50).join('\n');
+          const hint = text.split('\n').find((l) => l.trim()) || '';
+          const shortHint = hint.trim().slice(0, 80);
+          let status = 'unknown';
+          if (deviceLine) {
+            const dl = deviceLine.trim();
+            const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
+            const byToken = tokens.some((t) => t.length >= 3 && head.includes(t));
+            const byPrefix = dl.length >= 6 && head.includes(dl.slice(0, Math.min(24, dl.length)));
+            status = byToken || byPrefix ? 'ok' : 'stale';
+          }
+          return { fn, status, hint: shortHint };
+        });
       }
       setVersionCompareRows(rows);
     } catch (e) {
@@ -929,10 +1167,17 @@ export default function App() {
   const checkFirmwareUpdates = async () => {
     try {
       let v = await fetchPicoVersionNow();
+      if (!v && connectionMode === 'ble' && device) {
+        const r = await readBleFirmwareRevision(device);
+        if (r) {
+          setPicoVersion(r);
+          v = r;
+        }
+      }
       const savedIp = normalizeWifiBase(wifiIpInput);
       if (!v && savedIp) {
         try {
-          const res = await fetch(`http://${savedIp}/api/info`, { method: 'GET' });
+          const res = await fetchWithTimeout(`http://${savedIp}/api/info`, { method: 'GET' }, 6000);
           if (res.ok) {
             const info = await res.json();
             const ver = String(info.version ?? info.v ?? '').replace(/\0/g, '').trim();
@@ -949,13 +1194,13 @@ export default function App() {
       const sha = commit.sha?.slice(0, 7) || '?';
       const msg = commit.commit?.message?.split('\n')[0] || '';
       const remoteHint = `${sha} ${msg}`;
-      const local = (v && String(v).trim()) || String(picoVersion || '').replace(/\0/g, '').trim() || 'Unknown';
-      const needs = local !== 'Unknown' && !local.includes(sha);
+      const local = (v && String(v).trim()) || String(picoVersion || '').replace(/\0/g, '').trim();
+      const needs = local.length > 0 && !local.includes(sha);
       Alert.alert(
         'Firmware',
-        `Device version: ${local}\nGitHub main: ${remoteHint}\n\n${
-          local === 'Unknown'
-            ? 'Connect via BLE or WiFi so the app can read /api/info or the BLE version string.'
+        `Device version: ${local || '(not read)'}\nGitHub main: ${remoteHint}\n\n${
+          !local
+            ? 'Connect via BLE or Wi‑Fi, or enter the Pico IP in the WiFi field so /api/info can be read.'
             : needs
               ? 'Commit SHA is not in the device string — an update may be available.'
               : 'Compare lines in Settings show which file headers match the device line.'
@@ -1109,7 +1354,12 @@ export default function App() {
           <Text style={styles.settingsText}>App: v{APP_VERSION}</Text>
           <Text style={styles.settingsText}>Connection: {connectionMode === 'wifi' ? 'WiFi' : connectionMode === 'ble' ? 'Bluetooth' : '—'}</Text>
           <Text style={styles.settingsText}>
-            Pico: {String(picoVersion ?? '').replace(/\0/g, '').trim() || 'Unknown'}
+            Pico firmware:{' '}
+            {settingsVersionLoading ? '…' : String(picoVersion ?? '').replace(/\0/g, '').trim() || '—'}
+          </Text>
+          <Text style={styles.settingsHint}>
+            Same string the Pico exposes on the BLE firmware-revision characteristic and on Wi‑Fi GET /api/info (e.g.
+            4-18-2026-v1.2).
           </Text>
           <Text style={styles.settingsText}>
             Signal:{' '}
@@ -1228,8 +1478,9 @@ export default function App() {
             <View style={styles.versionDetailCard}>
               <Text style={styles.modalTitle}>GitHub files vs device</Text>
               <Text style={styles.versionCompareSubtitle}>
-                Device line: {String(picoVersion ?? '').replace(/\0/g, '').trim() || 'Unknown'} — ✓ match, ● mismatch, — no
-                version.
+                Device line for ✓/●: {String(picoVersion ?? '').replace(/\0/g, '').trim() || '(none yet)'} — uses
+                firmware_versions.json on GitHub when present (small/fast); otherwise first lines of each file. ✓ match, ●
+                mismatch, — no device line.
               </Text>
               <ScrollView style={styles.versionDetailScroll}>
                 {versionDetailLoading ? (
@@ -1476,6 +1727,7 @@ const styles = StyleSheet.create({
   settingsScrollContent: { padding: 16, paddingBottom: 40 },
   sectionTitle: { fontSize: 16, marginTop: 16, marginBottom: 8, color: '#333', ...FW600 },
   settingsText: { fontSize: 14, marginBottom: 6, color: '#444' },
+  settingsHint: { fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 15 },
   settingsInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 16 },
   inputLabel: { fontSize: 12, color: '#666', marginBottom: 4 },
   segmentRow: { flexDirection: 'row', flexWrap: 'wrap' },

@@ -34,3 +34,22 @@ npm run eas:ios
 ```
 
 Requires `eas-cli` and `npx eas login` (or `EXPO_TOKEN` in the environment).
+
+## Xcode / iOS SDK (App Store)
+
+Apple requires the **iOS 18 SDK** ( **Xcode 16+** ) for uploads. Expo SDK 50’s default EAS image uses **Xcode 15.4**, which fails validation. This repo sets `build.*.ios.image` to **`macos-sequoia-15.6-xcode-16.4`** in `eas.json`. If a build fails on that image, upgrade the project with `npx expo upgrade` and follow Expo’s SDK release notes.
+
+## TestFlight (App Store distribution)
+
+Use the **`production`** EAS profile — **`preview`** is internal-only and does not target TestFlight.
+
+1. **Commit and push** `bleapp` (including `app.json` version / `eas.json`).
+2. **GitHub:** Actions → **EAS iOS build** → **Run workflow** → profile **`production`** (recommended on Windows; avoids local `EPERM` upload failures).
+3. Wait for the build on [expo.dev](https://expo.dev) → project **ballast-monitor** → Builds. When it succeeds, submit the build to Apple:
+   - **Option A:** Expo dashboard → the finished build → **Submit to App Store** (follow prompts), or
+   - **Option B (CLI):** from a machine where `eas submit` works (often macOS/Linux or WSL):  
+     `npx eas-cli@latest submit --platform ios --latest --profile production`  
+     Apple / ASC credentials must already be configured for the project (`eas credentials` or prior dashboard submit).
+4. **App Store Connect** → your app → **TestFlight**: wait for processing (often 5–30+ minutes), then add testers or enable internal testing.
+
+`npm run eas:submit:ios` runs the same submit command as Option B (non-interactive; requires credentials on file).

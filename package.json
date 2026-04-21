@@ -1,6 +1,6 @@
 {
   "name": "bleapp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
@@ -8,7 +8,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "eas:ios": "eas build --platform ios --profile preview --non-interactive",
-    "eas:ios:prod": "eas build --platform ios --profile production --non-interactive"
+    "eas:ios:prod": "eas build --platform ios --profile production --non-interactive",
+    "eas:submit:ios": "eas submit --platform ios --latest --profile production --non-interactive"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.0",

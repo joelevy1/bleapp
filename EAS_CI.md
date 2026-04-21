@@ -11,7 +11,7 @@ Builds run on **Ubuntu**, so the Windows `EPERM` / `rmdir` issue during upload d
    - Name: `EXPO_TOKEN`
    - Value: paste the token.
 
-**Least clicks:** every **push to `main`** starts an iOS **`production`** build (TestFlight-ready). You don’t have to open Actions unless you want a manual run. Add **`[no-eas]`** to the commit message to skip a build (e.g. docs-only). If the **`eas-build`** environment requires approval, approve once in GitHub when the workflow is waiting.
+**Least clicks:** every **push to `main`** starts an iOS **`production`** build (TestFlight-ready). You don’t have to open Actions unless you want a manual run. Add **`[skip-eas]`** to the commit message only when you want to **skip** the build (e.g. docs-only). **Do not** put `[skip-eas]` in commit messages that explain this feature, or the workflow will skip. If the **`eas-build`** environment requires approval, approve once in GitHub when the workflow is waiting.
 
 Optional: **Actions → EAS iOS build → Run workflow** to pick **production** or **preview** without pushing.
 

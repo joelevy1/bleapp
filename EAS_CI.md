@@ -10,9 +10,10 @@ Builds run on **Ubuntu**, so the Windows `EPERM` / `rmdir` issue during upload d
 2. In the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**
    - Name: `EXPO_TOKEN`
    - Value: paste the token.
-3. Run **Actions → EAS iOS build → Run workflow**, choose **preview** or **production**.
 
-The workflow runs `eas build --platform ios --non-interactive --no-wait` (build continues on Expo; you get a link in the job log).
+**Least clicks:** every **push to `main`** starts an iOS **`production`** build (TestFlight-ready). You don’t have to open Actions unless you want a manual run. Add **`[no-eas]`** to the commit message to skip a build (e.g. docs-only). If the **`eas-build`** environment requires approval, approve once in GitHub when the workflow is waiting.
+
+Optional: **Actions → EAS iOS build → Run workflow** to pick **production** or **preview** without pushing.
 
 ## WSL (local fallback)
 

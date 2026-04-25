@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import { buildWatchContext } from './watchPayload';
 
-/** Set true only after verifying Watch + @plevo/expo-watch-connectivity on your iOS build. */
-const WATCH_ENABLED = false;
+/** Enabled for iOS builds that include the WatchKit companion target. */
+const WATCH_ENABLED = true;
 
 const SYNC_MS = 2500;
 const ACTIVATION_SETTLE_MS = 2000;

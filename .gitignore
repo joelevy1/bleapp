@@ -45,5 +45,5 @@ yarn-error.*
 *.tsbuildinfo
 
 # generated native folders
-/ios
+# Keep /android ignored; /ios may be committed when shipping a WatchKit target.
 /android

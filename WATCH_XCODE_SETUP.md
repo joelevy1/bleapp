@@ -1,8 +1,8 @@
-# Apple Watch companion (manual Xcode step)
+# Apple Watch companion (one-time Mac/Xcode step required)
 
 The iPhone app uses **`@plevo/expo-watch-connectivity`** and pushes tank data every ~2.5s via **WatchConnectivity application context**. Swift sources for the Watch UI live in **`watchkit-sources/BallastWatch/`**.
 
-**EAS cloud builds** only compile the **iOS** app from this repo. To ship the Watch binary you must add a **watchOS target** in Xcode on a Mac and copy these Swift files into it (or add the folder as group references).
+**Important:** the first time you ship Watch, a Mac with Xcode must add the Watch targets to `ios/`. After that, commit `ios/` and EAS can build phone+watch together from CI.
 
 ## 1. Generate the iOS project
 

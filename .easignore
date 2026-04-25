@@ -4,5 +4,4 @@ node_modules/
 api/
 .git/
 *.log
-# Xcode-only Watch sources (not needed for EAS RN build)
-watchkit-sources/
+# Keep watchkit-sources in the upload context for iOS workspace/watch target setup docs.

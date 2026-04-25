@@ -13,7 +13,7 @@ Builds run on **Ubuntu**, so the Windows `EPERM` / `rmdir` issue during upload d
 
 **Least clicks:** every **push to `main`** starts an iOS **`production`** build (TestFlight-ready). You don’t have to open Actions unless you want a manual run. Add **`[skip-eas]`** to the commit message only when you want to **skip** the build (e.g. docs-only). **Do not** put `[skip-eas]` in commit messages that explain this feature, or the workflow will skip. If the **`eas-build`** environment requires approval, approve once in GitHub when the workflow is waiting.
 
-Optional: **Actions → EAS iOS build → Run workflow** to pick **production** or **preview** without pushing.
+Optional: **Actions → EAS iOS build → Run workflow** to pick **production**, **production_xcode26**, or **preview** without pushing.
 
 ## WSL (local fallback)
 
@@ -38,19 +38,19 @@ Requires `eas-cli` and `npx eas login` (or `EXPO_TOKEN` in the environment).
 
 ## Xcode / iOS SDK (App Store)
 
-Apple requires the **iOS 18 SDK** ( **Xcode 16+** ) for uploads. Expo SDK 50’s default EAS image uses **Xcode 15.4**, which fails validation. This repo sets `build.*.ios.image` to **`macos-sequoia-15.6-xcode-16.4`** in `eas.json`. If a build fails on that image, upgrade the project with `npx expo upgrade` and follow Expo’s SDK release notes.
+Apple currently requires the **iOS 18 SDK** ( **Xcode 16+** ) for uploads. This repo now uses **`macos-sequoia-15.6-xcode-26.2`** for `production` and `production_xcode26` so future submissions are ready for Apple’s upcoming Xcode 26 requirement.
 
 ## TestFlight (App Store distribution)
 
-Use the **`production`** EAS profile — **`preview`** is internal-only and does not target TestFlight.
+Use the **`production`** or **`production_xcode26`** EAS profile — **`preview`** is internal-only and does not target TestFlight.
 
 1. **Commit and push** `bleapp` (including `app.json` version / `eas.json`).
-2. **GitHub:** Actions → **EAS iOS build** → **Run workflow** → profile **`production`** (recommended on Windows; avoids local `EPERM` upload failures).
+2. **GitHub:** Actions → **EAS iOS build** → **Run workflow** → profile **`production`** (default) or **`production_xcode26`** (same image, kept for clarity).
 3. Wait for the build on [expo.dev](https://expo.dev) → project **ballast-monitor** → Builds. When it succeeds, submit the build to Apple:
    - **Option A:** Expo dashboard → the finished build → **Submit to App Store** (follow prompts), or
    - **Option B (CLI):** from a machine where `eas submit` works (often macOS/Linux or WSL):  
-     `npx eas-cli@latest submit --platform ios --latest --profile production`  
+     `npx eas-cli@latest submit --platform ios --latest --profile production_xcode26`  
      Apple / ASC credentials must already be configured for the project (`eas credentials` or prior dashboard submit).
 4. **App Store Connect** → your app → **TestFlight**: wait for processing (often 5–30+ minutes), then add testers or enable internal testing.
 
-`npm run eas:submit:ios` runs the same submit command as Option B (non-interactive; requires credentials on file).
+`npm run eas:submit:ios:next` runs the same submit command as Option B for `production_xcode26` (non-interactive; requires credentials on file).

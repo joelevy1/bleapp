@@ -13,11 +13,18 @@
     "production": {
       "autoIncrement": true,
       "ios": {
-        "image": "macos-sequoia-15.6-xcode-16.4"
+        "image": "macos-sequoia-15.6-xcode-26.2"
+      }
+    },
+    "production_xcode26": {
+      "autoIncrement": true,
+      "ios": {
+        "image": "macos-sequoia-15.6-xcode-26.2"
       }
     }
   },
   "submit": {
-    "production": {}
+    "production": {},
+    "production_xcode26": {}
   }
 }

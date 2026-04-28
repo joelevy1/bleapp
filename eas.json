@@ -24,7 +24,15 @@
     }
   },
   "submit": {
-    "production": {},
-    "production_xcode26": {}
+    "production": {
+      "ios": {
+        "ascAppId": "1029586683"
+      }
+    },
+    "production_xcode26": {
+      "ios": {
+        "ascAppId": "1029586683"
+      }
+    }
   }
 }

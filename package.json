@@ -36,6 +36,7 @@
     "node": "20.20.2"
   },
   "devDependencies": {
+    "@expo/config-plugins": "~7.9.2",
     "@expo/ngrok": "^4.1.0"
   }
 }

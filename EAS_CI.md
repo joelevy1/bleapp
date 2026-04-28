@@ -15,6 +15,14 @@ Builds run on **Ubuntu**, so the Windows `EPERM` / `rmdir` issue during upload d
 
 Optional: **Actions → EAS iOS build → Run workflow** to pick **production**, **production_xcode26**, or **preview** without pushing.
 
+## Automatic TestFlight submit (no manual `eas submit`)
+
+The **GitHub Actions** workflow passes **`--auto-submit`** for **`production`** and **`production_xcode26`**. When EAS finishes building, it **queues submission to App Store Connect** (TestFlight-by-default for iOS — not public App Store review). You do **not** need to copy Expo’s “run `eas submit`” line after each build.
+
+**Requirements (one-time on Expo):** [`eas credentials`](https://docs.expo.dev/submit/ios/#submitting-your-app-using-cicd-services) must include an **App Store Connect API key** (or other non-interactive Apple auth) so **`eas submit`** can run unattended. If auto-submit fails on the **Submissions** tab in Expo, complete that setup and re-run.
+
+The **`preview`** profile does **not** add **`--auto-submit`** (internal-only distribution).
+
 ## WSL (local fallback)
 
 ```bash

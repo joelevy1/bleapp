@@ -1,4 +1,5 @@
-# Submits EAS iOS builds from GitHub (Linux runner — avoids Windows EPERM on upload).
+# EAS iOS builds from GitHub (Linux runner — avoids Windows EPERM on upload).
+# For profiles other than `preview`, adds --auto-submit so EAS submits to App Store Connect / TestFlight when the build finishes (no manual `eas submit`).
 # Requires repo secret: EXPO_TOKEN (https://expo.dev/account → Access tokens)
 #
 # One-time setup (approval before EAS spends a credit):
@@ -67,15 +68,19 @@ jobs:
             exit 1
           fi
 
-      - name: Submit iOS build to EAS
+      - name: EAS Build (and queue TestFlight submit for store profiles)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
           LOG_FILE="$(mktemp)"
+          SUBMIT_ARGS=()
+          if [ "${EAS_PROFILE:-}" != "preview" ]; then
+            SUBMIT_ARGS+=(--auto-submit)
+          fi
           set +e
           set -o pipefail
-          npx eas-cli@latest build --platform ios --profile "$EAS_PROFILE" --non-interactive --no-wait 2>&1 | tee "$LOG_FILE"
+          npx eas-cli@latest build --platform ios --profile "$EAS_PROFILE" --non-interactive --no-wait "${SUBMIT_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
           EXIT="${PIPESTATUS[0]}"
           set +o pipefail
           set -e

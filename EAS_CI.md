@@ -54,3 +54,17 @@ Use the **`production`** or **`production_xcode26`** EAS profile — **`preview`
 4. **App Store Connect** → your app → **TestFlight**: wait for processing (often 5–30+ minutes), then add testers or enable internal testing.
 
 `npm run eas:submit:ios:next` runs the same submit command as Option B for `production_xcode26` (non-interactive; requires credentials on file).
+
+## Troubleshooting failed Actions runs
+
+1. **Summary tab:** Open the workflow run → scroll to **Summary**. Failed **`eas build`** steps append the **last 120 lines** of the Expo CLI log so you do not need to download raw logs for the usual error message.
+
+2. **`Verify Expo authentication` fails:** [`EXPO_TOKEN`](https://expo.dev/account/settings/access-tokens) is missing, expired, or was pasted incorrectly into GitHub (**Settings → Secrets → Actions**). Regenerate the token and save the secret again.
+
+3. **`eas build` fails right away with credentials / provisioning:** CI uses **`--non-interactive`**. Apple signing credentials must already exist on Expo for this project (same account as `extra.eas.projectId` in `app.json`). Configure once locally or from a machine with Expo login:  
+   `npx eas-cli credentials`  
+   or complete setup in the [Expo dashboard](https://expo.dev) for project **ballast-monitor**.
+
+4. **`gh auth login` vs Expo:** GitHub CLI auth only affects **`gh`** commands (e.g. `gh run view --log-failed`). It does **not** change **`EXPO_TOKEN`** or Expo builds — keep both configured separately.
+
+5. **GitHub integration in Cursor:** Connecting GitHub in [cursor.com/dashboard/integrations](https://cursor.com/dashboard/integrations) enables Cursor product features (e.g. Bugbot); it does **not** replace **`EXPO_TOKEN`** or fix EAS by itself.

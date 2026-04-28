@@ -39,6 +39,7 @@ jobs:
     # Opt into Node 24 for actions that still bundle a JS runtime (see GitHub Actions Node deprecation).
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      EAS_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile || 'production' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -52,7 +53,37 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify Expo authentication
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "::error::Repository secret EXPO_TOKEN is missing or empty. GitHub → Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+          if ! npx eas-cli@latest whoami; then
+            echo "::error::eas whoami failed — regenerate EXPO_TOKEN at expo.dev (account → Access tokens) and update the repo secret."
+            exit 1
+          fi
+
       - name: Submit iOS build to EAS
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build --platform ios --profile "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile || 'production' }}" --non-interactive --no-wait
+        run: |
+          set -euo pipefail
+          LOG_FILE="$(mktemp)"
+          set +e
+          set -o pipefail
+          npx eas-cli@latest build --platform ios --profile "$EAS_PROFILE" --non-interactive --no-wait 2>&1 | tee "$LOG_FILE"
+          EXIT="${PIPESTATUS[0]}"
+          set +o pipefail
+          set -e
+          if [ "$EXIT" -ne 0 ]; then
+            echo "### eas build failed — log tail (last 120 lines)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 120 "$LOG_FILE" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit "$EXIT"
+          fi

@@ -2,7 +2,18 @@
  * Removes aps-environment so Ad Hoc / internal builds match provisioning profiles
  * that do not include Push Notifications (this app does not use remote push).
  */
-const { withEntitlementsPlist } = require('@expo/config-plugins');
+const path = require('path');
+
+function loadConfigPlugins() {
+  try {
+    return require('@expo/config-plugins');
+  } catch {
+    const expoDir = path.dirname(require.resolve('expo/package.json'));
+    return require(require.resolve('@expo/config-plugins', { paths: [expoDir] }));
+  }
+}
+
+const { withEntitlementsPlist } = loadConfigPlugins();
 
 module.exports = function withRemovePushEntitlement(config) {
   return withEntitlementsPlist(config, (cfg) => {

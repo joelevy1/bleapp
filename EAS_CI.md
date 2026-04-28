@@ -36,6 +36,8 @@ npx eas-cli@latest build --platform ios --profile preview --non-interactive
 
 `.\eas-build-windows.ps1` points `%TEMP%` to `C:\eas-cli-staging\tmp`. If upload still fails with `EPERM`, use **GitHub Actions** or **WSL** — do not rely on PowerShell alone.
 
+If **`eas credentials` / `eas submit` / `expo config`** errors with **`Cannot find module '@expo/config-plugins'`**, run **`git pull`**, then **`npm install`** from a **short path** outside Google Drive (e.g. `C:\dev\bleapp`) or fix `EPERM`; the config plugin also resolves `@expo/config-plugins` from **`expo`’s nested `node_modules`** when the root install is incomplete.
+
 ## Local anywhere
 
 ```bash

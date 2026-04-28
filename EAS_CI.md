@@ -55,6 +55,32 @@ Use the **`production`** or **`production_xcode26`** EAS profile — **`preview`
 
 `npm run eas:submit:ios:next` runs the same submit command as Option B for `production_xcode26` (non-interactive; requires credentials on file).
 
+## Apple Watch + EAS — one interactive run (required once)
+
+GitHub Actions uses **`eas build --non-interactive`**. Apple and Expo need a **human in the loop the first time** you add a second native target (Watch) with a **new bundle id**.
+
+This project has two iOS-related targets:
+
+- **BallastMonitor** — `com.joelevy.ballastmonitor`
+- **BallastWatch Watch App** — `com.joelevy.ballastmonitor.watchkitapp`
+
+EAS must create (or confirm) **separate provisioning profiles** for each. Until that’s done on Expo’s side, **CI will keep failing** with messages like *“Credentials are not set up. Run this command again in interactive mode”* — that is expected, not a bug in the repo.
+
+**Do this once** on any machine where you can sign in to **Expo** and (when prompted) **Apple** (your Mac, WSL, or Linux; avoid the Windows Google-Drive path if `npm` still throws `EPERM`):
+
+```bash
+cd bleapp
+npx eas-cli login
+npx eas-cli build --platform ios --profile production
+```
+
+- **Do not** pass `--non-interactive` for this run. When the CLI asks, let it set up or fix **credentials** for **both** targets.
+- After one **successful** build on [expo.dev](https://expo.dev), your **production** profile and “remote iOS credentials” on Expo are complete; **GitHub Actions** can then use non-interactive builds without you re-pasting errors.
+
+Alternative: `npx eas-cli credentials --platform ios` and follow prompts for each target until both bundle ids show valid profiles.
+
+**Credits:** Expo warned that monthly included credits are used — extra builds bill pay-as-you-go until the cycle resets; see billing under your Expo account settings.
+
 ## Troubleshooting failed Actions runs
 
 1. **Summary tab:** Open the workflow run → scroll to **Summary**. Failed **`eas build`** steps append the **last 120 lines** of the Expo CLI log so you do not need to download raw logs for the usual error message.

@@ -94,3 +94,7 @@ Alternative: `npx eas-cli credentials --platform ios` and follow prompts for eac
 4. **`gh auth login` vs Expo:** GitHub CLI auth only affects **`gh`** commands (e.g. `gh run view --log-failed`). It does **not** change **`EXPO_TOKEN`** or Expo builds — keep both configured separately.
 
 5. **GitHub integration in Cursor:** Connecting GitHub in [cursor.com/dashboard/integrations](https://cursor.com/dashboard/integrations) enables Cursor product features (e.g. Bugbot); it does **not** replace **`EXPO_TOKEN`** or fix EAS by itself.
+
+6. **`pod install`: `[Xcodeproj] Unable to find compatibility version string for object version '70'`** — Xcode 26 can emit **`objectVersion = 70`**, which **CocoaPods 1.16.x / `xcodeproj` 1.27.0** on EAS does not map yet. This repo pins **`project.pbxproj`** to **`objectVersion = 77`**, which parses correctly and builds. After re-running **prebuild** on a future Mac, re-check this line before committing.
+
+7. **`expo doctor` recommends adding `/ios` to `.easignore`.** Ignore that suggestion here: **`ios/`** is intentionally committed so the Watch companion is built—**never** `.easignore` it for this setup. Expo will not overwrite `orientation` / **icons / plugins** while `ios/` exists; update native files manually when changing those (`app.json` + Xcode).

@@ -41,6 +41,9 @@ target 'BallastMonitor' do
   use_expo_modules!
   config = use_native_modules!
 
+  # @plevo/expo-watch-connectivity — ensure native module links for EAS / local iOS builds
+  pod 'ExpoWatchConnectivity', :path => '../node_modules/@plevo/expo-watch-connectivity/ios'
+
   use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
   use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
 

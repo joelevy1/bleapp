@@ -67,11 +67,15 @@ export function useWatchSync(deps) {
       messageSub = WatchConnectivity.addMessageListener((event) => {
         const { message, replyId } = event;
         const action = message && message.action;
+        const tank = message && message.tank;
+        const unit = message && message.unit;
         const cur = depsRef.current;
         try {
           if (action === 'resetAll') cur.onResetAll?.();
           else if (action === 'toggleFillDrain') cur.onToggleFillDrain?.();
-          else if (action === 'disconnect') cur.onDisconnect?.();
+          else if (action === 'resetTank' && tank) cur.onResetTank?.(tank);
+          else if (action === 'toggleTankFillDrain' && tank) cur.onToggleTankFillDrain?.(tank);
+          else if (action === 'setUnit' && unit) cur.onSetUnit?.(unit);
         } catch (err) {
           console.warn('[Watch] command', err);
         }

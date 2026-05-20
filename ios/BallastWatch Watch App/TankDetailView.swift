@@ -5,88 +5,48 @@ struct TankDetailView: View {
     let tank: TankRoute
 
     var body: some View {
+        let ctx = phone.context
+        let pct = WatchContextReader.intKey(tank.pctKey, in: ctx)
+        let fill = WatchContextReader.intKey(tank.fillKey, in: ctx)
+        let unit = (ctx["unitLabel"] as? String) ?? "gal"
+        let isFill = WatchContextReader.boolKey(tank.fillModeKey, in: ctx, default: true)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 Text(tank.rawValue)
                     .font(.title3.bold())
 
-                let pct = intKey(tank.pctKey)
-                let fill = intKey(tank.fillKey)
-                Text("Display: \(pct)%")
-                    .foregroundStyle(bandColor(fillPct: fill))
+                Text("\(pct)%")
+                    .font(.system(.title2, design: .rounded))
+                    .bold()
+                    .foregroundStyle(WatchContextReader.bandColor(fillPct: fill))
+
                 ProgressView(value: Double(min(pct, 100)), total: 100)
+                    .tint(WatchContextReader.bandColor(fillPct: fill))
 
-                Text(modeLine)
+                Text(isFill ? "Mode: Fill" : "Mode: Drain")
                     .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                let unit = (phone.context["unitLabel"] as? String) ?? "gal"
-                Text("Top: \(topVal) \(unit)")
-                Text("Btm: \(btmVal) \(unit)")
-                Text("Tank total: \(tankTotal) \(unit)")
+                Text("Top: \(WatchContextReader.stringKey(tank.topKey, in: ctx)) \(unit)")
+                Text("Btm: \(WatchContextReader.stringKey(tank.btmKey, in: ctx)) \(unit)")
+                Text("Tank total: \(WatchContextReader.stringKey(tank.dispKey, in: ctx)) \(unit)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 6) {
+                    Button("Reset tank") {
+                        phone.sendAction("resetTank", tank: tank.phoneName)
+                    }
+                    Button(isFill ? "→ Drain" : "→ Fill") {
+                        phone.sendAction("toggleTankFillDrain", tank: tank.phoneName)
+                    }
+                }
+                .font(.caption2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
         }
         .navigationTitle(tank.rawValue)
-    }
-
-    private var modeLine: String {
-        let k = fillModeKey
-        let v = phone.context[k] as? Bool ?? true
-        return v ? "Mode: Fill" : "Mode: Drain"
-    }
-
-    private var fillModeKey: String {
-        switch tank {
-        case .port: return "fillPort"
-        case .starboard: return "fillStbd"
-        case .mid: return "fillMid"
-        case .forward: return "fillFwd"
-        }
-    }
-
-    private var topVal: String {
-        stringKey(topKey)
-    }
-    private var btmVal: String {
-        stringKey(btmKey)
-    }
-    private var tankTotal: String {
-        stringKey(tank.dispKey)
-    }
-
-    private var topKey: String {
-        switch tank {
-        case .port: return "portTop"
-        case .starboard: return "stbdTop"
-        case .mid: return "midTop"
-        case .forward: return "fwdTop"
-        }
-    }
-    private var btmKey: String {
-        switch tank {
-        case .port: return "portBtm"
-        case .starboard: return "stbdBtm"
-        case .mid: return "midBtm"
-        case .forward: return "fwdBtm"
-        }
-    }
-
-    private func intKey(_ key: String) -> Int {
-        if let n = phone.context[key] as? Int { return n }
-        if let n = phone.context[key] as? NSNumber { return n.intValue }
-        return 0
-    }
-
-    private func stringKey(_ key: String) -> String {
-        if let s = phone.context[key] as? String { return s }
-        if let n = phone.context[key] as? NSNumber { return n.stringValue }
-        return "—"
-    }
-
-    private func bandColor(fillPct: Int) -> Color {
-        if fillPct <= 75 { return .green }
-        if fillPct <= 90 { return .yellow }
-        return .red
     }
 }

@@ -1235,6 +1235,22 @@ export default function App() {
     });
   }, []);
 
+  const handleWatchResetTank = useCallback((tankName) => {
+    if (TANK_NAMES.includes(tankName)) resetTank(tankName);
+  }, []);
+
+  const handleWatchToggleTankFillDrain = useCallback((tankName) => {
+    if (!TANK_NAMES.includes(tankName)) return;
+    setTankFillModes((prev) => {
+      const next = !prev[tankName];
+      return { ...prev, [tankName]: next };
+    });
+  }, []);
+
+  const handleWatchSetUnit = useCallback((unit) => {
+    if (unit === 'counter' || unit === 'gallons' || unit === 'pounds') setUnitMode(unit);
+  }, []);
+
   useWatchSync({
     isConnected,
     connectionMode,
@@ -1249,7 +1265,9 @@ export default function App() {
     TANK_CONFIG,
     onResetAll: resetAll,
     onToggleFillDrain: handleWatchToggleFillDrain,
-    onDisconnect: disconnect,
+    onResetTank: handleWatchResetTank,
+    onToggleTankFillDrain: handleWatchToggleTankFillDrain,
+    onSetUnit: handleWatchSetUnit,
   });
 
   // HOME (not connected)

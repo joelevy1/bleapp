@@ -1,6 +1,11 @@
 import { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import { buildWatchContext } from './watchPayload';
+
+/** Avoid loading @plevo/expo-watch-connectivity when the native module isn't in the binary. */
+function watchNativeAvailable() {
+  return Platform.OS === 'ios' && !!NativeModules.ExpoWatchConnectivity;
+}
 
 /** Enabled for iOS builds that include the WatchKit companion target. */
 const WATCH_ENABLED = true;
@@ -34,7 +39,7 @@ export function useWatchSync(deps) {
   depsRef.current = deps;
 
   useEffect(() => {
-    if (!WATCH_ENABLED || Platform.OS !== 'ios') return undefined;
+    if (!WATCH_ENABLED || !watchNativeAvailable()) return undefined;
 
     let cancelled = false;
     let intervalId = null;

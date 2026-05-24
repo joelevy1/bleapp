@@ -57,6 +57,11 @@ final class PhoneBridge: NSObject, ObservableObject {
         guard !applicationContext.isEmpty else { return }
         context = applicationContext
     }
+
+    private func applyPayloadIfBallast(_ payload: [String: Any]) {
+        guard WatchContextReader.hasContextKey("v", in: payload) else { return }
+        applyContext(payload)
+    }
 }
 
 extension PhoneBridge: WCSessionDelegate {
@@ -73,7 +78,30 @@ extension PhoneBridge: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         DispatchQueue.main.async {
-            self.applyContext(applicationContext)
+            self.applyPayloadIfBallast(applicationContext)
         }
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        DispatchQueue.main.async {
+            self.applyPayloadIfBallast(userInfo)
+        }
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        DispatchQueue.main.async {
+            self.applyPayloadIfBallast(message)
+        }
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        DispatchQueue.main.async {
+            self.applyPayloadIfBallast(message)
+        }
+        replyHandler(["ok": 1])
     }
 }

@@ -5,9 +5,17 @@ import { buildWatchContext } from './watchPayload';
 /** Enabled for iOS builds that include the WatchKit companion target. */
 const WATCH_ENABLED = true;
 
-const SYNC_MS = 2500;
+const SYNC_MS = 1500;
+const PUSH_MIN_INTERVAL_MS = 350;
 const ACTIVATION_POLL_MS = 250;
 const ACTIVATION_MAX_WAIT_MS = 15000;
+
+let imperativePush = null;
+
+/** Call from BLE/WiFi handlers so the watch updates even when JS timers are throttled. */
+export function pushWatchContextNow() {
+  imperativePush?.();
+}
 
 /** WCSession requires JSON-serializable plist types; drop NaN/undefined. */
 function sanitizeWatchPlist(obj) {
@@ -40,6 +48,23 @@ async function waitForWatchSessionActivated(WatchConnectivity, cancelledRef) {
   return false;
 }
 
+async function deliverWatchContext(WatchConnectivity, ctx) {
+  await WatchConnectivity.updateApplicationContext(ctx);
+  try {
+    WatchConnectivity.transferUserInfo(ctx);
+  } catch (_) {
+    /* queued transfer unavailable */
+  }
+  try {
+    const st = WatchConnectivity.sessionState;
+    if (st.isReachable) {
+      WatchConnectivity.sendMessage(ctx).catch(() => {});
+    }
+  } catch (_) {
+    /* not reachable — application context / userInfo still apply */
+  }
+}
+
 /**
  * Pushes ballast state to Apple Watch via application context and handles quick commands.
  * Watch app must be added in Xcode (see WATCH_XCODE_SETUP.md).
@@ -52,6 +77,8 @@ export function useWatchSync(deps) {
 
   const watchRef = useRef({ push: null, WatchConnectivity: null });
   const cancelledRef = useRef(false);
+  const lastPushAtRef = useRef(0);
+  const warnedNotInstalledRef = useRef(false);
 
   useEffect(() => {
     if (!WATCH_ENABLED || Platform.OS !== 'ios') return undefined;
@@ -62,7 +89,6 @@ export function useWatchSync(deps) {
     let activationSub = null;
     let sessionSub = null;
     let appStateSub = null;
-    let warnedNotInstalled = false;
 
     (async () => {
       let WatchConnectivity;
@@ -88,18 +114,21 @@ export function useWatchSync(deps) {
 
       watchRef.current.WatchConnectivity = WatchConnectivity;
 
-      const push = async () => {
+      const push = async (force = false) => {
         if (cancelledRef.current) return;
+        const now = Date.now();
+        if (!force && now - lastPushAtRef.current < PUSH_MIN_INTERVAL_MS) return;
+        lastPushAtRef.current = now;
+
         try {
           const st = WatchConnectivity.sessionState;
           if (!st.isWatchAppInstalled) {
-            if (!warnedNotInstalled) {
-              warnedNotInstalled = true;
+            if (!warnedNotInstalledRef.current) {
+              warnedNotInstalledRef.current = true;
               console.warn(
-                '[Watch] Ballast Watch app is not installed on the watch. Open the Watch app on iPhone and install Ballast Monitor.',
+                '[Watch] isWatchAppInstalled=false — still pushing context (iOS can report false briefly).',
               );
             }
-            return;
           }
           if (st.activationState !== 'activated') {
             const ok = await waitForWatchSessionActivated(WatchConnectivity, cancelledRef);
@@ -109,14 +138,17 @@ export function useWatchSync(deps) {
             }
           }
           const ctx = sanitizeWatchPlist(buildWatchContext(depsRef.current));
-          await WatchConnectivity.updateApplicationContext(ctx);
+          await deliverWatchContext(WatchConnectivity, ctx);
         } catch (e) {
-          console.warn('[Watch] updateApplicationContext failed', e);
+          console.warn('[Watch] push failed', e);
         }
       };
 
       watchRef.current.push = () => {
-        push();
+        push(true);
+      };
+      imperativePush = () => {
+        push(true);
       };
 
       messageSub = WatchConnectivity.addMessageListener((event) => {
@@ -145,27 +177,28 @@ export function useWatchSync(deps) {
       });
 
       activationSub = WatchConnectivity.addActivationListener(({ activationState }) => {
-        if (activationState === 'activated') push();
+        if (activationState === 'activated') push(true);
       });
 
       sessionSub = WatchConnectivity.addSessionStateListener(() => {
-        push();
+        push(true);
       });
 
       appStateSub = AppState.addEventListener('change', (state) => {
-        if (state === 'active') push();
+        if (state === 'active' || state === 'background') push(true);
       });
 
       const ready = await waitForWatchSessionActivated(WatchConnectivity, cancelledRef);
       if (cancelledRef.current) return;
-      if (ready) await push();
+      if (ready) await push(true);
       intervalId = setInterval(() => {
-        push();
+        push(false);
       }, SYNC_MS);
     })();
 
     return () => {
       cancelledRef.current = true;
+      if (imperativePush) imperativePush = null;
       watchRef.current.push = null;
       watchRef.current.WatchConnectivity = null;
       if (intervalId) clearInterval(intervalId);
@@ -176,10 +209,15 @@ export function useWatchSync(deps) {
     };
   }, []);
 
-  const { isConnected, connectionMode, unitMode, isFillMode } = deps;
+  const { isConnected, connectionMode, unitMode, isFillMode, flowValues, tankFillModes, signalStrength } =
+    deps;
+  const flowSig = Array.isArray(flowValues) ? flowValues.join(',') : '';
+  const tankSig = tankFillModes
+    ? `${tankFillModes.Port}|${tankFillModes.Starboard}|${tankFillModes.Mid}|${tankFillModes.Forward}`
+    : '';
 
   useEffect(() => {
     if (!WATCH_ENABLED || Platform.OS !== 'ios') return;
     watchRef.current.push?.();
-  }, [isConnected, connectionMode, unitMode, isFillMode]);
+  }, [isConnected, connectionMode, unitMode, isFillMode, flowSig, tankSig, signalStrength]);
 }

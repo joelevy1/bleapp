@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
-import { useWatchSync } from './watchSync';
+import { pushWatchContextNow, useWatchSync } from './watchSync';
 
 global.Buffer = Buffer;
 
@@ -694,6 +694,7 @@ export default function App() {
         const arr = data.pulses || data.values || data;
         if (!Array.isArray(arr) || arr.length < 8) throw new Error('Bad JSON');
         setFlowValues(arr.slice(0, 8).map((n) => Number(n) || 0));
+        pushWatchContextNow();
         setWifiPollError(null);
         if (infoRes?.ok) {
           try {
@@ -852,6 +853,7 @@ export default function App() {
             values.push(data.readUInt32LE(i * 4));
           }
           setFlowValues(values);
+          pushWatchContextNow();
         }
       });
 

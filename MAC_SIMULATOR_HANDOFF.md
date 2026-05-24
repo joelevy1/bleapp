@@ -1,5 +1,9 @@
 # Mac agent — Simulator white screen (LA623)
 
+**Use the full one-shot runbook:** [`MAC_AGENT_ONE_SHOT_SIM.md`](MAC_AGENT_ONE_SHOT_SIM.md)
+
+---
+
 **Repo:** `~/dev/bleapp` · **main** @ `e757b80+` · `com.joelevy.ballastmonitor`
 
 ## Goal

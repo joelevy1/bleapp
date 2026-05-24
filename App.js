@@ -1314,8 +1314,8 @@ export default function App() {
         rows = OTA_FILES.map((fn, i) => {
           const text = fileTexts[i];
           const head = text.split('\n').slice(0, 50).join('\n');
-          const hint = text.split('\n').find((l) => l.trim()) || '';
-          const shortHint = hint.trim().slice(0, 80);
+          const firstLine = text.split('\n').find((l) => l.trim()) || '';
+          const shortHint = firstLine.trim().slice(0, 80);
           const status = deviceLine ? rowStatusDeviceVsRef(deviceLine, shortHint) : 'unknown';
           const hint = deviceLine
             ? `device: ${deviceLine.slice(0, 36)} · file: ${shortHint.slice(0, 36)}`

@@ -20,7 +20,10 @@ function sanitizeWatchPlist(obj) {
     if (v === undefined) continue;
     if (typeof v === 'number') {
       out[k] = Number.isFinite(v) ? v : 0;
-    } else if (typeof v === 'boolean' || typeof v === 'string') {
+    } else if (typeof v === 'boolean') {
+      // Plist bridge often delivers 0/1 NSNumber to watchOS — avoid bare Bool-only reads there.
+      out[k] = v ? 1 : 0;
+    } else if (typeof v === 'string') {
       out[k] = v;
     }
   }
@@ -37,6 +40,8 @@ function sanitizeWatchPlist(obj) {
 export function useWatchSync(deps) {
   const depsRef = useRef(deps);
   depsRef.current = deps;
+
+  const watchRef = useRef({ push: null, WatchConnectivity: null });
 
   useEffect(() => {
     if (!WATCH_ENABLED || !watchNativeAvailable()) return undefined;
@@ -57,12 +62,18 @@ export function useWatchSync(deps) {
       if (cancelled) return;
 
       try {
-        if (!WatchConnectivity.isSupported) return;
+        if (!WatchConnectivity.isSupported) {
+          console.warn('[Watch] not supported on this device');
+          return;
+        }
         await WatchConnectivity.activate();
       } catch (e) {
         console.warn('[Watch] activate failed', e);
+        return;
       }
       if (cancelled) return;
+
+      watchRef.current.WatchConnectivity = WatchConnectivity;
 
       messageSub = WatchConnectivity.addMessageListener((event) => {
         const { message, replyId } = event;
@@ -73,9 +84,10 @@ export function useWatchSync(deps) {
         try {
           if (action === 'resetAll') cur.onResetAll?.();
           else if (action === 'toggleFillDrain') cur.onToggleFillDrain?.();
+          else if (action === 'disconnect') cur.onDisconnect?.();
+          else if (action === 'setUnit' && unit) cur.onSetUnit?.(unit);
           else if (action === 'resetTank' && tank) cur.onResetTank?.(tank);
           else if (action === 'toggleTankFillDrain' && tank) cur.onToggleTankFillDrain?.(tank);
-          else if (action === 'setUnit' && unit) cur.onSetUnit?.(unit);
         } catch (err) {
           console.warn('[Watch] command', err);
         }
@@ -91,13 +103,16 @@ export function useWatchSync(deps) {
       const push = () => {
         try {
           const ctx = sanitizeWatchPlist(buildWatchContext(depsRef.current));
-          WatchConnectivity.updateApplicationContext(ctx).catch(() => {});
-        } catch (_) {
-          /* ignore */
+          WatchConnectivity.updateApplicationContext(ctx).catch((err) => {
+            console.warn('[Watch] updateApplicationContext failed', err);
+          });
+        } catch (e) {
+          console.warn('[Watch] push context', e);
         }
       };
 
-      // Session activation completes asynchronously; first push after activate() often fails if immediate.
+      watchRef.current.push = push;
+
       settleTimeout = setTimeout(() => {
         if (cancelled) return;
         push();
@@ -107,9 +122,19 @@ export function useWatchSync(deps) {
 
     return () => {
       cancelled = true;
+      watchRef.current.push = null;
+      watchRef.current.WatchConnectivity = null;
       if (settleTimeout) clearTimeout(settleTimeout);
       if (intervalId) clearInterval(intervalId);
       if (messageSub) messageSub.remove();
     };
   }, []);
+
+  const { isConnected, connectionMode, unitMode, isFillMode } = deps;
+
+  // Push immediately when connection state changes (do not wait for next 2.5s tick).
+  useEffect(() => {
+    if (!WATCH_ENABLED || Platform.OS !== 'ios') return;
+    watchRef.current.push?.();
+  }, [isConnected, connectionMode, unitMode, isFillMode]);
 }

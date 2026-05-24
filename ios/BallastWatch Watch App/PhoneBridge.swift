@@ -20,8 +20,9 @@ final class PhoneBridge: NSObject, ObservableObject {
         }
     }
 
+    /// JS / plist often delivers booleans as NSNumber — do not use `as? Bool` only.
     var isBoatConnected: Bool {
-        context["connected"] as? Bool ?? false
+        WatchContextReader.boolKey("connected", in: context, default: false)
     }
 
     var contextAgeMs: Double? {
@@ -35,7 +36,6 @@ final class PhoneBridge: NSObject, ObservableObject {
         return age >= 0 && age < Self.staleContextMs
     }
 
-    /// Show tank UI only when the phone reports a live boat connection with recent data.
     var shouldShowHome: Bool {
         isBoatConnected && hasFreshContext
     }
@@ -52,6 +52,11 @@ final class PhoneBridge: NSObject, ObservableObject {
         if let unit { payload["unit"] = unit }
         WCSession.default.sendMessage(payload, replyHandler: { _ in }, errorHandler: { _ in })
     }
+
+    private func applyContext(_ applicationContext: [String: Any]) {
+        guard !applicationContext.isEmpty else { return }
+        context = applicationContext
+    }
 }
 
 extension PhoneBridge: WCSessionDelegate {
@@ -59,11 +64,16 @@ extension PhoneBridge: WCSessionDelegate {
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
-    ) {}
+    ) {
+        // Phone may have sent context before the watch app opened — read the latest cached payload.
+        DispatchQueue.main.async {
+            self.applyContext(session.receivedApplicationContext)
+        }
+    }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         DispatchQueue.main.async {
-            self.context = applicationContext
+            self.applyContext(applicationContext)
         }
     }
 }

@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   InteractionManager,
+  Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -28,6 +29,47 @@ const FW500 = Platform.OS === 'ios' ? {} : { fontWeight: '500' };
 const FW600 = Platform.OS === 'ios' ? {} : { fontWeight: '600' };
 
 const DEVICE_NAME = 'Ballast Monitor';
+
+/** iOS often leaves `name` null in scan; `localName` may still be set. */
+function bleDeviceLabel(dev) {
+  const n = dev?.name || dev?.localName;
+  return n != null ? String(n).trim() : '';
+}
+
+function isBallastBleDevice(dev) {
+  return bleDeviceLabel(dev) === DEVICE_NAME;
+}
+
+/** Scan filtered by SERVICE_UUID may match before iOS fills in `name`. */
+function isBallastBleCandidate(dev) {
+  if (!dev) return false;
+  if (isBallastBleDevice(dev)) return true;
+  const uuids = dev.serviceUUIDs;
+  if (Array.isArray(uuids)) {
+    return uuids.some((id) => String(id).toLowerCase() === SERVICE_UUID);
+  }
+  return false;
+}
+
+function waitForBluetoothPoweredOn(mgr, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      subscription.remove();
+      reject(new Error('Bluetooth initialization timed out'));
+    }, timeoutMs);
+    const subscription = mgr.onStateChange((state) => {
+      if (state === 'PoweredOn') {
+        clearTimeout(timer);
+        subscription.remove();
+        resolve();
+      } else if (state === 'Unsupported' || state === 'Unauthorized') {
+        clearTimeout(timer);
+        subscription.remove();
+        reject(new Error('Bluetooth is not available'));
+      }
+    }, true);
+  });
+}
 /** Environmental Sensing (custom flow/control/file transfer on Pico). */
 const SERVICE_UUID = '0000181a-0000-1000-8000-00805f9b34fb';
 /** Standard Device Information — Firmware Revision (0x2A26) is normally registered here, not under 0x181A. */
@@ -64,6 +106,9 @@ const STORAGE = {
 
 const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
 
+/** Matches main_wifi.py MIN_FLOW_RATE (gallons/min) for single-pump alerts. */
+const MIN_FLOW_RATE_GPM = 0.1;
+
 function normalizeWifiBase(ip) {
   const s = String(ip || '').trim();
   if (!s) return '';
@@ -84,16 +129,73 @@ function manifestIsUsable(m) {
   return false;
 }
 
+/** Pico firmware labels (e.g. 4-18-2026-v1.2) — not git SHAs. */
 function rowStatusDeviceVsRef(deviceLine, ref) {
   if (!deviceLine || !ref) return 'unknown';
   const dl = deviceLine.trim();
   const refS = String(ref).trim();
-  const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
-  const byToken = tokens.some((t) => t.length >= 3 && refS.includes(t));
-  const byPrefix = dl.length >= 6 && refS.includes(dl.slice(0, Math.min(24, dl.length)));
-  const revTokens = refS.split(/[\s/_-]+/).filter((t) => t.length >= 2);
-  const byRevInDevice = revTokens.some((t) => t.length >= 3 && dl.includes(t));
-  return byToken || byPrefix || byRevInDevice ? 'ok' : 'stale';
+  if (dl === refS) return 'ok';
+  if (dl.includes(refS) || refS.includes(dl)) return 'ok';
+  return 'stale';
+}
+
+function parseTankMaxDraft(draft, fallback) {
+  const next = { ...fallback };
+  for (const name of TANK_NAMES) {
+    const key = name.toLowerCase();
+    const raw = draft?.[key];
+    if (raw === undefined || raw === '') continue;
+    const n = parseInt(String(raw).replace(/,/g, ''), 10);
+    if (Number.isFinite(n) && n > 0) next[key] = n;
+  }
+  return next;
+}
+
+/** Open app from Pushover / Safari with Pico IP (see ballast main_wifi notify_wifi_ip). */
+function parseWifiDeepLink(url) {
+  if (!url || typeof url !== 'string') return '';
+  const u = url.trim();
+  try {
+    if (/^ballastmonitor:\/\//i.test(u) || /^com\.joelevy\.ballastmonitor:\/\//i.test(u)) {
+      const afterScheme = u.replace(/^[^:]+:\/\//i, '');
+      const qIdx = afterScheme.indexOf('?');
+      const pathPart = qIdx >= 0 ? afterScheme.slice(0, qIdx) : afterScheme;
+      const query = qIdx >= 0 ? afterScheme.slice(qIdx + 1) : '';
+      if (query) {
+        for (const part of query.split('&')) {
+          const [k, v] = part.split('=');
+          if (k === 'ip' && v) return normalizeWifiBase(decodeURIComponent(v));
+        }
+      }
+      const fromPath = pathPart.replace(/^wifi\/?/i, '').split('/')[0];
+      return normalizeWifiBase(fromPath);
+    }
+    const httpMatch = u.match(/^https?:\/\/([^/?#]+)/i);
+    if (httpMatch) return normalizeWifiBase(httpMatch[1]);
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(u)) return u;
+  } catch (_) {
+    /* ignore */
+  }
+  return '';
+}
+
+async function fetchFirmwareManifest() {
+  try {
+    const mRes = await fetchWithTimeout(FIRMWARE_MANIFEST_URL, {}, 8000);
+    if (!mRes.ok) return null;
+    return await mRes.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+function firmwareNeedsUpdate(deviceVer, manifest) {
+  const local = String(deviceVer ?? '').replace(/\0/g, '').trim();
+  const release = String(manifest?.release ?? manifest?.bundle_version ?? '').trim();
+  if (!local || !release) return false;
+  if (local === release) return false;
+  if (local.includes(release) || release.includes(local)) return false;
+  return true;
 }
 
 /** Avoids multi‑minute hangs when the saved IP is wrong or the Pico is unreachable (not a BLE limitation). */
@@ -215,8 +317,14 @@ export default function App() {
   const [versionDetailVisible, setVersionDetailVisible] = useState(false);
   const [versionDetailLoading, setVersionDetailLoading] = useState(false);
   const [versionCompareRows, setVersionCompareRows] = useState([]);
+  const [tankMaxDraft, setTankMaxDraft] = useState(null);
+  const [pumpAlertTanks, setPumpAlertTanks] = useState(() => new Set());
+  const [pumpAlertFlashOn, setPumpAlertFlashOn] = useState(true);
 
   const wifiPollRef = useRef(null);
+  const flowHistoryRef = useRef(Object.fromEntries([...Array(8)].map((_, i) => [i, []])));
+  const lastFlowCountsRef = useRef(new Array(8).fill(0));
+  const lastFlowTickRef = useRef(0);
 
   const TANK_CONFIG = [
     { name: 'Port', pumps: [1, 2], color: 'White/Green' },
@@ -263,6 +371,88 @@ export default function App() {
     return () => task.cancel();
   }, []);
 
+  const applyWifiDeepLink = useCallback((url) => {
+    const ip = parseWifiDeepLink(url);
+    if (!ip) return false;
+    setWifiIpInput(ip);
+    setCurrentScreen('home');
+    setWifiModalVisible(true);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    const onUrl = ({ url }) => {
+      applyWifiDeepLink(url);
+    };
+    Linking.getInitialURL()
+      .then((url) => {
+        if (url) applyWifiDeepLink(url);
+      })
+      .catch(() => {});
+    const sub = Linking.addEventListener('url', onUrl);
+    return () => sub.remove();
+  }, [applyWifiDeepLink]);
+
+  useEffect(() => {
+    if (currentScreen === 'settings') {
+      setTankMaxDraft(
+        TANK_NAMES.reduce((acc, name) => {
+          const key = name.toLowerCase();
+          acc[key] = String(tankMaxValues[key] ?? '');
+          return acc;
+        }, {}),
+      );
+    }
+  }, [currentScreen]);
+
+  useEffect(() => {
+    if (!isConnected) {
+      setPumpAlertTanks(new Set());
+      flowHistoryRef.current = Object.fromEntries([...Array(8)].map((_, i) => [i, []]));
+      lastFlowCountsRef.current = new Array(8).fill(0);
+      lastFlowTickRef.current = 0;
+      return undefined;
+    }
+    const now = Date.now();
+    if (lastFlowTickRef.current > 0 && now - lastFlowTickRef.current < 900) return undefined;
+    const dtSec = lastFlowTickRef.current > 0 ? (now - lastFlowTickRef.current) / 1000 : 1;
+    lastFlowTickRef.current = now;
+    const ppg = pulsesPerGallon > 0 ? pulsesPerGallon : 450;
+
+    for (let i = 0; i < 8; i += 1) {
+      const pulsesPerSec = (flowValues[i] - lastFlowCountsRef.current[i]) / dtSec;
+      const gpm = (pulsesPerSec * 60) / ppg;
+      const hist = flowHistoryRef.current[i];
+      hist.push(gpm);
+      if (hist.length > 5) hist.shift();
+      lastFlowCountsRef.current[i] = flowValues[i];
+    }
+
+    const alerts = new Set();
+    for (const tank of TANK_CONFIG) {
+      const [p1, p2] = tank.pumps;
+      const h1 = flowHistoryRef.current[p1];
+      const h2 = flowHistoryRef.current[p2];
+      if (h1.length < 5 || h2.length < 5) continue;
+      const f1 = h1.reduce((a, b) => a + b, 0) / h1.length;
+      const f2 = h2.reduce((a, b) => a + b, 0) / h2.length;
+      const r1 = f1 > MIN_FLOW_RATE_GPM;
+      const r2 = f2 > MIN_FLOW_RATE_GPM;
+      if (r1 !== r2) alerts.add(tank.name);
+    }
+    setPumpAlertTanks(alerts);
+    return undefined;
+  }, [flowValues, isConnected, pulsesPerGallon]);
+
+  useEffect(() => {
+    if (pumpAlertTanks.size === 0) {
+      setPumpAlertFlashOn(true);
+      return undefined;
+    }
+    const id = setInterval(() => setPumpAlertFlashOn((on) => !on), 500);
+    return () => clearInterval(id);
+  }, [pumpAlertTanks]);
+
   const persistWifiIp = useCallback(async (v) => {
     const n = normalizeWifiBase(v);
     setWifiBase(n);
@@ -307,10 +497,12 @@ export default function App() {
 
   const saveSettingsToStorage = useCallback(async () => {
     try {
+      const nextTankMax = tankMaxDraft ? parseTankMaxDraft(tankMaxDraft, tankMaxValues) : tankMaxValues;
+      setTankMaxValues(nextTankMax);
       await AsyncStorage.setItem(STORAGE.UNIT_MODE, unitMode);
       await AsyncStorage.setItem(STORAGE.PULSES_PER_GAL, String(pulsesPerGallon));
       await AsyncStorage.setItem(STORAGE.POUNDS_PER_GAL, String(poundsPerGallon));
-      await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(tankMaxValues));
+      await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(nextTankMax));
       if (connectionMode === 'wifi' && wifiBase) {
         const res = await fetchWithTimeout(
           `http://${wifiBase}/api/settings`,
@@ -321,7 +513,7 @@ export default function App() {
               unit_mode: unitMode,
               pulses_per_gallon: pulsesPerGallon,
               pounds_per_gallon: poundsPerGallon,
-              tank_max: tankMaxValues,
+              tank_max: nextTankMax,
               is_fill_mode: isFillMode,
               tank_fill: tankFillModes,
             }),
@@ -344,6 +536,7 @@ export default function App() {
     pulsesPerGallon,
     poundsPerGallon,
     tankMaxValues,
+    tankMaxDraft,
     connectionMode,
     wifiBase,
     isFillMode,
@@ -397,7 +590,7 @@ export default function App() {
     return () => clearInterval(id);
   }, [connectionMode, device, isConnected, bleManager]);
 
-  // Passive RSSI on home only (no connect): delayed scan so the boat’s advertisement shows signal while on Wi‑Fi connect screen path is unchanged.
+  // Passive RSSI on home (no connect): wait for BT PoweredOn like connect does, then scan by service UUID.
   useEffect(() => {
     if (currentScreen !== 'home' || isConnected || isScanning) return undefined;
     let cancelled = false;
@@ -409,24 +602,27 @@ export default function App() {
         let mgr;
         try {
           mgr = await ensureBleManager();
+          await waitForBluetoothPoweredOn(mgr);
         } catch {
           return;
         }
         if (cancelled) return;
-        mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+        mgr.startDeviceScan([SERVICE_UUID], { allowDuplicates: true }, (error, dev) => {
           if (cancelled || error || !dev) return;
-          if (dev.name === DEVICE_NAME && Number.isFinite(dev.rssi)) {
+          // Scan is filtered to 0x181A; iOS may omit name on first advertisements.
+          if (Number.isFinite(dev.rssi)) {
             setScanRssi(dev.rssi);
           }
         });
         stopTimer = setTimeout(() => {
+          if (cancelled) return;
           try {
             mgr.stopDeviceScan();
           } catch (_) {
             /* ignore */
           }
-        }, 10000);
-      }, 600);
+        }, 12000);
+      }, 400);
     });
     return () => {
       cancelled = true;
@@ -552,43 +748,25 @@ export default function App() {
     }
     setIsScanning(true);
     try {
-      const subscription = mgr.onStateChange((state) => {
-        if (state === 'PoweredOn') {
-          subscription.remove();
-          startScan(mgr);
-        } else if (state === 'Unsupported' || state === 'Unauthorized') {
-          subscription.remove();
-          setIsScanning(false);
-          Alert.alert('Bluetooth Error', 'Bluetooth is not available');
-        }
-      }, true);
-      setTimeout(() => {
-        subscription.remove();
-        setIsScanning((s) => {
-          if (s) {
-            Alert.alert('Timeout', 'Bluetooth initialization timed out');
-            return false;
-          }
-          return s;
-        });
-      }, 5000);
+      await waitForBluetoothPoweredOn(mgr, 5000);
+      startScan(mgr);
     } catch (error) {
       setIsScanning(false);
-      Alert.alert('Error', `Failed to scan: ${error.message}`);
+      Alert.alert('Bluetooth Error', error.message || 'Bluetooth is not available');
     }
   };
 
   const startScan = (mgr) => {
     setScanRssi(null);
     let found = false;
-    mgr.startDeviceScan(null, { allowDuplicates: true }, (error, dev) => {
+    mgr.startDeviceScan([SERVICE_UUID], { allowDuplicates: true }, (error, dev) => {
       if (error) {
         mgr.stopDeviceScan();
         setIsScanning(false);
         Alert.alert('Scan Error', error.message);
         return;
       }
-      if (dev.name === DEVICE_NAME) {
+      if (isBallastBleCandidate(dev)) {
         setScannedDevice(dev);
         if (Number.isFinite(dev.rssi)) setScanRssi(dev.rssi);
         if (!found) {
@@ -1109,19 +1287,7 @@ export default function App() {
         }
       }
 
-      let manifest = null;
-      try {
-        const mRes = await fetchWithTimeout(FIRMWARE_MANIFEST_URL, {}, 8000);
-        if (mRes.ok) {
-          try {
-            manifest = await mRes.json();
-          } catch (_) {
-            manifest = null;
-          }
-        }
-      } catch (_) {
-        manifest = null;
-      }
+      const manifest = await fetchFirmwareManifest();
 
       let rows;
       if (manifestIsUsable(manifest)) {
@@ -1136,7 +1302,12 @@ export default function App() {
             ref = fallbackRelease;
           }
           const status = rowStatusDeviceVsRef(deviceLine, ref);
-          return { fn, status, hint: ref ? ref.slice(0, 80) : '—' };
+          const hint = ref
+            ? deviceLine
+              ? `device: ${deviceLine.slice(0, 36)} · github: ${ref.slice(0, 36)}`
+              : ref.slice(0, 80)
+            : '—';
+          return { fn, status, hint };
         });
       } else {
         const fileTexts = await Promise.all(OTA_FILES.map((fn) => fetchGithubRawFile(fn)));
@@ -1145,15 +1316,11 @@ export default function App() {
           const head = text.split('\n').slice(0, 50).join('\n');
           const hint = text.split('\n').find((l) => l.trim()) || '';
           const shortHint = hint.trim().slice(0, 80);
-          let status = 'unknown';
-          if (deviceLine) {
-            const dl = deviceLine.trim();
-            const tokens = dl.split(/[\s/_-]+/).filter((t) => t.length >= 2);
-            const byToken = tokens.some((t) => t.length >= 3 && head.includes(t));
-            const byPrefix = dl.length >= 6 && head.includes(dl.slice(0, Math.min(24, dl.length)));
-            status = byToken || byPrefix ? 'ok' : 'stale';
-          }
-          return { fn, status, hint: shortHint };
+          const status = deviceLine ? rowStatusDeviceVsRef(deviceLine, shortHint) : 'unknown';
+          const hint = deviceLine
+            ? `device: ${deviceLine.slice(0, 36)} · file: ${shortHint.slice(0, 36)}`
+            : shortHint;
+          return { fn, status, hint };
         });
       }
       setVersionCompareRows(rows);
@@ -1190,20 +1357,26 @@ export default function App() {
           /* ignore */
         }
       }
+      const manifest = await fetchFirmwareManifest();
       const commit = await fetchGithubLatestCommit();
       const sha = commit.sha?.slice(0, 7) || '?';
       const msg = commit.commit?.message?.split('\n')[0] || '';
       const remoteHint = `${sha} ${msg}`;
       const local = (v && String(v).trim()) || String(picoVersion || '').replace(/\0/g, '').trim();
-      const needs = local.length > 0 && !local.includes(sha);
+      const githubTag = String(manifest?.release ?? manifest?.bundle_version ?? '').trim();
+      const needs = firmwareNeedsUpdate(local, manifest);
       Alert.alert(
         'Firmware',
-        `Device version: ${local || '(not read)'}\nGitHub main: ${remoteHint}\n\n${
+        `Device (Pico): ${local || '(not read)'}${
+          githubTag ? `\nGitHub firmware tag: ${githubTag}` : ''
+        }\nLatest source commit: ${remoteHint}\n\n${
           !local
             ? 'Connect via BLE or Wi‑Fi, or enter the Pico IP in the WiFi field so /api/info can be read.'
             : needs
-              ? 'Commit SHA is not in the device string — an update may be available.'
-              : 'Compare lines in Settings show which file headers match the device line.'
+              ? 'The Pico version does not match firmware_versions.json on GitHub main — tap Apply update to flash OTA files.'
+              : githubTag
+                ? 'Pico matches the GitHub firmware tag. The commit line is only the latest change on main (not stored on the device).'
+                : 'Use Compare file versions to see per-file labels.'
         }`,
         [
           { text: 'Cancel', style: 'cancel' },
@@ -1235,20 +1408,17 @@ export default function App() {
     });
   }, []);
 
+  const handleWatchSetUnit = useCallback((unit) => {
+    if (unit === 'counter' || unit === 'gallons' || unit === 'pounds') setUnitMode(unit);
+  }, []);
+
   const handleWatchResetTank = useCallback((tankName) => {
-    if (TANK_NAMES.includes(tankName)) resetTank(tankName);
+    if (TANK_CONFIG.some((t) => t.name === tankName)) resetTank(tankName);
   }, []);
 
   const handleWatchToggleTankFillDrain = useCallback((tankName) => {
-    if (!TANK_NAMES.includes(tankName)) return;
-    setTankFillModes((prev) => {
-      const next = !prev[tankName];
-      return { ...prev, [tankName]: next };
-    });
-  }, []);
-
-  const handleWatchSetUnit = useCallback((unit) => {
-    if (unit === 'counter' || unit === 'gallons' || unit === 'pounds') setUnitMode(unit);
+    if (!TANK_CONFIG.some((t) => t.name === tankName)) return;
+    setTankFillModes((prev) => ({ ...prev, [tankName]: !prev[tankName] }));
   }, []);
 
   useWatchSync({
@@ -1265,9 +1435,10 @@ export default function App() {
     TANK_CONFIG,
     onResetAll: resetAll,
     onToggleFillDrain: handleWatchToggleFillDrain,
+    onDisconnect: disconnect,
+    onSetUnit: handleWatchSetUnit,
     onResetTank: handleWatchResetTank,
     onToggleTankFillDrain: handleWatchToggleTankFillDrain,
-    onSetUnit: handleWatchSetUnit,
   });
 
   // HOME (not connected)
@@ -1431,11 +1602,11 @@ export default function App() {
               <TextInput
                 style={styles.tankMaxInput}
                 keyboardType="number-pad"
-                value={String(tankMaxValues[name.toLowerCase()] ?? '')}
+                value={tankMaxDraft?.[name.toLowerCase()] ?? String(tankMaxValues[name.toLowerCase()] ?? '')}
                 onChangeText={(t) => {
-                  const n = parseInt(t, 10);
-                  if (t === '' || Number.isFinite(n)) {
-                    setTankMaxValues((prev) => ({ ...prev, [name.toLowerCase()]: t === '' ? prev[name.toLowerCase()] : n }));
+                  const key = name.toLowerCase();
+                  if (/^\d*$/.test(t)) {
+                    setTankMaxDraft((prev) => ({ ...(prev || {}), [key]: t }));
                   }
                 }}
               />
@@ -1496,9 +1667,9 @@ export default function App() {
             <View style={styles.versionDetailCard}>
               <Text style={styles.modalTitle}>GitHub files vs device</Text>
               <Text style={styles.versionCompareSubtitle}>
-                Device line for ✓/●: {String(picoVersion ?? '').replace(/\0/g, '').trim() || '(none yet)'} — uses
-                firmware_versions.json on GitHub when present (small/fast); otherwise first lines of each file. ✓ match, ●
-                mismatch, — no device line.
+                Pico: {String(picoVersion ?? '').replace(/\0/g, '').trim() || '(none yet)'} — ✓ same label as
+                firmware_versions.json on GitHub main, ● different (e.g. 4-18 vs 4-19), — unknown. Dates in the hint
+                are firmware labels, not file edit dates.
               </Text>
               <ScrollView style={styles.versionDetailScroll}>
                 {versionDetailLoading ? (
@@ -1568,8 +1739,12 @@ export default function App() {
             const [pump1Idx, pump2Idx] = tank.pumps;
             const [color1, color2] = tank.color.split('/');
             const fillOn = tankFillModes[tank.name];
+            const pumpAlert = pumpAlertTanks.has(tank.name);
             return (
-              <View key={tankIdx} style={styles.tankCard}>
+              <View
+                key={tankIdx}
+                style={[styles.tankCard, pumpAlert && pumpAlertFlashOn && styles.tankCardPumpAlert]}
+              >
                 <View style={styles.tankTopToggle}>
                   <TouchableOpacity
                     style={[styles.miniToggle, fillOn && styles.miniToggleOn]}
@@ -1691,6 +1866,14 @@ const styles = StyleSheet.create({
   scrollView: { flex: 1 },
   tankGrid: { padding: 12, flexDirection: 'row', flexWrap: 'wrap' },
   tankCard: { width: '48%', backgroundColor: '#f5f5f5', borderRadius: 12, padding: 10, margin: '1%' },
+  tankCardPumpAlert: { backgroundColor: '#FFE0B2', borderWidth: 2, borderColor: '#FF9800' },
+  pumpAlertBanner: {
+    fontSize: 10,
+    color: '#E65100',
+    marginBottom: 6,
+    textAlign: 'center',
+    ...FW600,
+  },
   tankTopToggle: { flexDirection: 'row', justifyContent: 'center', marginBottom: 8 },
   miniToggle: { paddingVertical: 4, paddingHorizontal: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', marginHorizontal: 3, borderRadius: 6 },
   miniToggleOn: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },

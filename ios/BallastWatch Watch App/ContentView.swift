@@ -123,7 +123,7 @@ struct StatusHeaderView: View {
     }
 
     private var modeLabel: String {
-        let global = phone.context["globalFill"] as? Bool ?? true
+        let global = WatchContextReader.boolKey("globalFill", in: phone.context, default: true)
         return global ? "Fill" : "Drain"
     }
 }

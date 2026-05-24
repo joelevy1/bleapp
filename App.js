@@ -130,13 +130,40 @@ function manifestIsUsable(m) {
 }
 
 /** Pico firmware labels (e.g. 4-18-2026-v1.2) — not git SHAs. */
+function normalizeFirmwareLabel(s) {
+  const t = String(s ?? '')
+    .replace(/\0/g, '')
+    .trim();
+  const m = t.match(/\d{1,2}-\d{1,2}-\d{4}-v[\d.]+/i);
+  return m ? m[0] : t;
+}
+
+/** Pico firmware labels (e.g. 4-18-2026-v1.2) — not git SHAs. */
 function rowStatusDeviceVsRef(deviceLine, ref) {
   if (!deviceLine || !ref) return 'unknown';
-  const dl = deviceLine.trim();
-  const refS = String(ref).trim();
+  const dl = normalizeFirmwareLabel(deviceLine);
+  const refS = normalizeFirmwareLabel(ref);
+  if (!dl || !refS) return 'unknown';
   if (dl === refS) return 'ok';
   if (dl.includes(refS) || refS.includes(dl)) return 'ok';
   return 'stale';
+}
+
+/** Same refs as Compare file versions — used by Check for updates. */
+function manifestFileStatuses(deviceLine, manifest) {
+  if (!manifestIsUsable(manifest)) return null;
+  const fallbackRelease = String(manifest.release ?? manifest.bundle_version ?? '')
+    .replace(/\0/g, '')
+    .trim();
+  return OTA_FILES.map((fn) => {
+    let ref = '';
+    if (manifest.files && typeof manifest.files === 'object' && manifest.files[fn] != null) {
+      ref = String(manifest.files[fn]).replace(/\0/g, '').trim();
+    } else {
+      ref = fallbackRelease;
+    }
+    return rowStatusDeviceVsRef(deviceLine, ref);
+  });
 }
 
 function parseTankMaxDraft(draft, fallback) {
@@ -190,12 +217,20 @@ async function fetchFirmwareManifest() {
 }
 
 function firmwareNeedsUpdate(deviceVer, manifest) {
-  const local = String(deviceVer ?? '').replace(/\0/g, '').trim();
+  const local = String(deviceVer ?? '')
+    .replace(/\0/g, '')
+    .trim();
+  if (!local) return false;
+
+  const fileStatuses = manifestFileStatuses(local, manifest);
+  if (fileStatuses) {
+    if (fileStatuses.every((s) => s === 'ok')) return false;
+    if (fileStatuses.some((s) => s === 'stale')) return true;
+  }
+
   const release = String(manifest?.release ?? manifest?.bundle_version ?? '').trim();
-  if (!local || !release) return false;
-  if (local === release) return false;
-  if (local.includes(release) || release.includes(local)) return false;
-  return true;
+  if (!release) return false;
+  return rowStatusDeviceVsRef(local, release) === 'stale';
 }
 
 /** Avoids multi‑minute hangs when the saved IP is wrong or the Pico is unreachable (not a BLE limitation). */
@@ -1365,6 +1400,19 @@ export default function App() {
       const local = (v && String(v).trim()) || String(picoVersion || '').replace(/\0/g, '').trim();
       const githubTag = String(manifest?.release ?? manifest?.bundle_version ?? '').trim();
       const needs = firmwareNeedsUpdate(local, manifest);
+      const alertButtons = needs
+        ? [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Apply update',
+              onPress: () => {
+                if (connectionMode === 'ble') runFirmwareUpdateBle();
+                else if (connectionMode === 'wifi') runFirmwareUpdateWifi();
+                else Alert.alert('Firmware', 'Connect via BLE or WiFi first.');
+              },
+            },
+          ]
+        : [{ text: 'OK' }];
       Alert.alert(
         'Firmware',
         `Device (Pico): ${local || '(not read)'}${
@@ -1375,20 +1423,10 @@ export default function App() {
             : needs
               ? 'The Pico version does not match firmware_versions.json on GitHub main — tap Apply update to flash OTA files.'
               : githubTag
-                ? 'Pico matches the GitHub firmware tag. The commit line is only the latest change on main (not stored on the device).'
-                : 'Use Compare file versions to see per-file labels.'
+                ? 'Pico matches GitHub (firmware tag and per-file labels). The commit line is only the latest change on main (not stored on the device).'
+                : 'Pico matches GitHub per-file labels in firmware_versions.json.'
         }`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Apply update',
-            onPress: () => {
-              if (connectionMode === 'ble') runFirmwareUpdateBle();
-              else if (connectionMode === 'wifi') runFirmwareUpdateWifi();
-              else Alert.alert('Firmware', 'Connect via BLE or WiFi first.');
-            },
-          },
-        ],
+        alertButtons,
       );
     } catch (e) {
       Alert.alert('Firmware', String(e.message || e));

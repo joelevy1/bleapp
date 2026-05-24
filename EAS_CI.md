@@ -23,6 +23,8 @@ The **GitHub Actions** workflow passes **`--auto-submit`** for **`production`** 
 
 The **`preview`** profile does **not** add **`--auto-submit`** (internal-only distribution).
 
+**TestFlight group:** `eas.json` submit profiles include `"groups": ["Levy Ballast App"]` so each production submit adds the build to that internal group. In App Store Connect → **Levy Ballast App** → **Settings**, enable **Enable automatic distribution** so testers get new builds without a manual “notify” click.
+
 ## WSL (local fallback)
 
 ```bash

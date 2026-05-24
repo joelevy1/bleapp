@@ -26,12 +26,14 @@
   "submit": {
     "production": {
       "ios": {
-        "ascAppId": "1029586683"
+        "ascAppId": "1029586683",
+        "groups": ["Levy Ballast App"]
       }
     },
     "production_xcode26": {
       "ios": {
-        "ascAppId": "1029586683"
+        "ascAppId": "1029586683",
+        "groups": ["Levy Ballast App"]
       }
     }
   }

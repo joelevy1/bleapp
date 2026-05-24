@@ -31,7 +31,7 @@ final class PhoneBridge: NSObject, ObservableObject {
     }
 
     var hasFreshContext: Bool {
-        guard context["v"] != nil else { return false }
+        guard WatchContextReader.hasContextKey("v", in: context) else { return false }
         guard let age = contextAgeMs else { return false }
         return age >= 0 && age < Self.staleContextMs
     }

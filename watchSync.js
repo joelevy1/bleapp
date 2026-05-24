@@ -1,17 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { NativeModules, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { buildWatchContext } from './watchPayload';
-
-/** Avoid loading @plevo/expo-watch-connectivity when the native module isn't in the binary. */
-function watchNativeAvailable() {
-  return Platform.OS === 'ios' && !!NativeModules.ExpoWatchConnectivity;
-}
 
 /** Enabled for iOS builds that include the WatchKit companion target. */
 const WATCH_ENABLED = true;
 
 const SYNC_MS = 2500;
-const ACTIVATION_SETTLE_MS = 2000;
+const ACTIVATION_POLL_MS = 250;
+const ACTIVATION_MAX_WAIT_MS = 15000;
 
 /** WCSession requires JSON-serializable plist types; drop NaN/undefined. */
 function sanitizeWatchPlist(obj) {
@@ -21,7 +17,6 @@ function sanitizeWatchPlist(obj) {
     if (typeof v === 'number') {
       out[k] = Number.isFinite(v) ? v : 0;
     } else if (typeof v === 'boolean') {
-      // Plist bridge often delivers 0/1 NSNumber to watchOS — avoid bare Bool-only reads there.
       out[k] = v ? 1 : 0;
     } else if (typeof v === 'string') {
       out[k] = v;
@@ -30,36 +25,54 @@ function sanitizeWatchPlist(obj) {
   return out;
 }
 
+async function waitForWatchSessionActivated(WatchConnectivity, cancelledRef) {
+  const deadline = Date.now() + ACTIVATION_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (cancelledRef.current) return false;
+    try {
+      const st = WatchConnectivity.sessionState;
+      if (st?.activationState === 'activated') return true;
+    } catch (_) {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, ACTIVATION_POLL_MS));
+  }
+  return false;
+}
+
 /**
  * Pushes ballast state to Apple Watch via application context and handles quick commands.
  * Watch app must be added in Xcode (see WATCH_XCODE_SETUP.md).
  *
- * Important: do not static-import @plevo/expo-watch-connectivity — loading that native module
- * at bundle evaluation time can crash the app on launch; load it only after mount.
+ * Important: do not static-import @plevo/expo-watch-connectivity — load it only after mount.
  */
 export function useWatchSync(deps) {
   const depsRef = useRef(deps);
   depsRef.current = deps;
 
   const watchRef = useRef({ push: null, WatchConnectivity: null });
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
-    if (!WATCH_ENABLED || !watchNativeAvailable()) return undefined;
+    if (!WATCH_ENABLED || Platform.OS !== 'ios') return undefined;
 
-    let cancelled = false;
+    cancelledRef.current = false;
     let intervalId = null;
     let messageSub = null;
-    let settleTimeout = null;
+    let activationSub = null;
+    let sessionSub = null;
+    let appStateSub = null;
+    let warnedNotInstalled = false;
 
     (async () => {
       let WatchConnectivity;
       try {
         ({ WatchConnectivity } = await import('@plevo/expo-watch-connectivity'));
       } catch (e) {
-        console.warn('[Watch] module load failed', e);
+        console.warn('[Watch] module load failed — is ExpoWatchConnectivity in the iOS build?', e);
         return;
       }
-      if (cancelled) return;
+      if (cancelledRef.current) return;
 
       try {
         if (!WatchConnectivity.isSupported) {
@@ -71,9 +84,40 @@ export function useWatchSync(deps) {
         console.warn('[Watch] activate failed', e);
         return;
       }
-      if (cancelled) return;
+      if (cancelledRef.current) return;
 
       watchRef.current.WatchConnectivity = WatchConnectivity;
+
+      const push = async () => {
+        if (cancelledRef.current) return;
+        try {
+          const st = WatchConnectivity.sessionState;
+          if (!st.isWatchAppInstalled) {
+            if (!warnedNotInstalled) {
+              warnedNotInstalled = true;
+              console.warn(
+                '[Watch] Ballast Watch app is not installed on the watch. Open the Watch app on iPhone and install Ballast Monitor.',
+              );
+            }
+            return;
+          }
+          if (st.activationState !== 'activated') {
+            const ok = await waitForWatchSessionActivated(WatchConnectivity, cancelledRef);
+            if (!ok) {
+              console.warn('[Watch] WCSession not activated yet — skip push');
+              return;
+            }
+          }
+          const ctx = sanitizeWatchPlist(buildWatchContext(depsRef.current));
+          await WatchConnectivity.updateApplicationContext(ctx);
+        } catch (e) {
+          console.warn('[Watch] updateApplicationContext failed', e);
+        }
+      };
+
+      watchRef.current.push = () => {
+        push();
+      };
 
       messageSub = WatchConnectivity.addMessageListener((event) => {
         const { message, replyId } = event;
@@ -100,39 +144,40 @@ export function useWatchSync(deps) {
         }
       });
 
-      const push = () => {
-        try {
-          const ctx = sanitizeWatchPlist(buildWatchContext(depsRef.current));
-          WatchConnectivity.updateApplicationContext(ctx).catch((err) => {
-            console.warn('[Watch] updateApplicationContext failed', err);
-          });
-        } catch (e) {
-          console.warn('[Watch] push context', e);
-        }
-      };
+      activationSub = WatchConnectivity.addActivationListener(({ activationState }) => {
+        if (activationState === 'activated') push();
+      });
 
-      watchRef.current.push = push;
-
-      settleTimeout = setTimeout(() => {
-        if (cancelled) return;
+      sessionSub = WatchConnectivity.addSessionStateListener(() => {
         push();
-        intervalId = setInterval(push, SYNC_MS);
-      }, ACTIVATION_SETTLE_MS);
+      });
+
+      appStateSub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') push();
+      });
+
+      const ready = await waitForWatchSessionActivated(WatchConnectivity, cancelledRef);
+      if (cancelledRef.current) return;
+      if (ready) await push();
+      intervalId = setInterval(() => {
+        push();
+      }, SYNC_MS);
     })();
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       watchRef.current.push = null;
       watchRef.current.WatchConnectivity = null;
-      if (settleTimeout) clearTimeout(settleTimeout);
       if (intervalId) clearInterval(intervalId);
       if (messageSub) messageSub.remove();
+      if (activationSub) activationSub.remove();
+      if (sessionSub) sessionSub.remove();
+      if (appStateSub) appStateSub.remove();
     };
   }, []);
 
   const { isConnected, connectionMode, unitMode, isFillMode } = deps;
 
-  // Push immediately when connection state changes (do not wait for next 2.5s tick).
   useEffect(() => {
     if (!WATCH_ENABLED || Platform.OS !== 'ios') return;
     watchRef.current.push?.();

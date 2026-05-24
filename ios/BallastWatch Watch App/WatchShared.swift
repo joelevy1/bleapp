@@ -81,7 +81,17 @@ enum WatchContextReader {
     static func boolKey(_ key: String, in context: [String: Any], default defaultValue: Bool = true) -> Bool {
         if let v = context[key] as? Bool { return v }
         if let n = context[key] as? NSNumber { return n.boolValue }
+        if let s = context[key] as? String {
+            let t = s.trimmingCharacters(in: .whitespaces).lowercased()
+            if t == "1" || t == "true" || t == "yes" { return true }
+            if t == "0" || t == "false" || t == "no" { return false }
+        }
         return defaultValue
+    }
+
+    static func hasContextKey(_ key: String, in context: [String: Any]) -> Bool {
+        if context[key] != nil { return true }
+        return intKey(key, in: context) != 0
     }
 
     static func bandColor(fillPct: Int) -> Color {

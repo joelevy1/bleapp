@@ -106,6 +106,28 @@ const STORAGE = {
 
 const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
 
+/** Calibrated from empty→overflow fill session (sum of both pumps per tank at full). */
+const DEFAULT_TANK_MAX = {
+  port: 9940,
+  starboard: 9958,
+  mid: 11087,
+  forward: 8764,
+};
+const LEGACY_DEFAULT_TANK_MAX = {
+  port: 10000,
+  starboard: 10000,
+  mid: 10000,
+  forward: 5000,
+};
+
+function tankMaxMatchesLegacyDefaults(o) {
+  if (!o || typeof o !== 'object') return false;
+  return TANK_NAMES.every((n) => {
+    const k = n.toLowerCase();
+    return Number(o[k]) === LEGACY_DEFAULT_TANK_MAX[k];
+  });
+}
+
 /** Matches main_wifi.py MIN_FLOW_RATE (gallons/min) for single-pump alerts. */
 const MIN_FLOW_RATE_GPM = 0.1;
 
@@ -330,12 +352,7 @@ export default function App() {
   const [picoVersion, setPicoVersion] = useState('');
   const [settingsVersionLoading, setSettingsVersionLoading] = useState(false);
   const [signalStrength, setSignalStrength] = useState(null);
-  const [tankMaxValues, setTankMaxValues] = useState({
-    port: 10000,
-    starboard: 10000,
-    mid: 10000,
-    forward: 5000,
-  });
+  const [tankMaxValues, setTankMaxValues] = useState(DEFAULT_TANK_MAX);
   const [tankFillModes, setTankFillModes] = useState({
     Port: true,
     Starboard: true,
@@ -394,7 +411,10 @@ export default function App() {
           }
           if (tm) {
             const o = JSON.parse(tm);
-            if (o && typeof o === 'object') {
+            if (tankMaxMatchesLegacyDefaults(o)) {
+              setTankMaxValues(DEFAULT_TANK_MAX);
+              await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(DEFAULT_TANK_MAX));
+            } else if (o && typeof o === 'object') {
               setTankMaxValues((prev) => ({ ...prev, ...o }));
             }
           }
@@ -980,33 +1000,24 @@ export default function App() {
   };
 
   const formatPumpValue = (pumpIdx, tankName) => {
-    const pulses = flowValues[pumpIdx];
-    const maxP = tankMaxValues[tankName.toLowerCase()];
-    const totalTank = getTankTotalPulses(tankName);
-    const drain = !tankFillModes[tankName];
-    let displayPulses = pulses;
-    if (drain && maxP) {
-      const remaining = Math.max(0, maxP - totalTank);
-      if (totalTank <= 0) {
-        displayPulses = remaining / 2;
-      } else {
-        displayPulses = (remaining * pulses) / totalTank;
-      }
-    }
-    return convertValue(displayPulses);
+    return convertValue(flowValues[pumpIdx]);
   };
 
   const formatTotalValue = () => {
-    const totalPulses = flowValues.reduce((a, b) => a + b, 0);
-    const totalMax = TANK_NAMES.reduce((s, n) => s + (tankMaxValues[n.toLowerCase()] || 0), 0);
     if (isFillMode) {
+      const totalPulses = flowValues.reduce((a, b) => a + b, 0);
       return convertValue(totalPulses);
     }
-    return convertValue(Math.max(0, totalMax - totalPulses));
+    const remaining = TANK_NAMES.reduce((sum, name) => {
+      const maxP = tankMaxValues[name.toLowerCase()] || 0;
+      const total = getTankTotalPulses(name);
+      return sum + Math.max(0, maxP - total);
+    }, 0);
+    return convertValue(remaining);
   };
 
   const convertValue = (pulses) => {
-    if (unitMode === 'counter') return pulses;
+    if (unitMode === 'counter') return String(Math.round(pulses));
     const gallons = pulses / pulsesPerGallon;
     if (unitMode === 'gallons') return gallons.toFixed(1);
     return (gallons * poundsPerGallon).toFixed(1);

@@ -49,19 +49,16 @@ function formatPumpDisplay(
   tankConfig,
 ) {
   const pulses = flowValues[pumpIdx] || 0;
-  const maxP = tankMaxValues[tankName.toLowerCase()];
-  const totalTank = getTankTotalPulses(tankName, flowValues, tankConfig);
-  const drain = !tankFillModes[tankName];
-  let displayPulses = pulses;
-  if (drain && maxP) {
-    const remaining = Math.max(0, maxP - totalTank);
-    if (totalTank <= 0) {
-      displayPulses = remaining / 2;
-    } else {
-      displayPulses = (remaining * pulses) / totalTank;
-    }
-  }
-  return convertValue(displayPulses, unitMode, pulsesPerGallon, poundsPerGallon);
+  return convertValue(pulses, unitMode, pulsesPerGallon, poundsPerGallon);
+}
+
+
+function drainRemainingPulses(flowValues, tankMaxValues, tankConfig) {
+  return TANK_KEYS.reduce((sum, name) => {
+    const maxP = tankMaxValues[name.toLowerCase()] || 0;
+    const total = getTankTotalPulses(name, flowValues, tankConfig);
+    return sum + Math.max(0, maxP - total);
+  }, 0);
 }
 
 /** Total tank “display” gallons (sum of pump pulses → one number). */
@@ -103,9 +100,9 @@ export function buildWatchContext(d) {
   const fwdFill = fillPercentForColor('Forward', flow, tankMaxValues, TANK_CONFIG);
 
   const totalPulses = flow.reduce((a, b) => a + b, 0);
-  const totalMax = tankNames.reduce((s, n) => s + (tankMaxValues[n.toLowerCase()] || 0), 0);
+  const drainRemaining = drainRemainingPulses(flow, tankMaxValues, TANK_CONFIG);
   const totalGalRaw =
-    isFillMode ? totalPulses / pulsesPerGallon : Math.max(0, totalMax - totalPulses) / pulsesPerGallon;
+    isFillMode ? totalPulses / pulsesPerGallon : drainRemaining / pulsesPerGallon;
 
   const unitLabel = unitMode === 'counter' ? 'cnt' : unitMode === 'gallons' ? 'gal' : 'lbs';
 
@@ -141,7 +138,7 @@ export function buildWatchContext(d) {
     midDisp: convertValue(getTankTotalPulses('Mid', flow, TANK_CONFIG), unitMode, pulsesPerGallon, poundsPerGallon),
     fwdDisp: convertValue(getTankTotalPulses('Forward', flow, TANK_CONFIG), unitMode, pulsesPerGallon, poundsPerGallon),
     totalDisp: convertValue(
-      isFillMode ? totalPulses : Math.max(0, totalMax - totalPulses),
+      isFillMode ? totalPulses : drainRemaining,
       unitMode,
       pulsesPerGallon,
       poundsPerGallon,

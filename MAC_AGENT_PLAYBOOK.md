@@ -2,7 +2,7 @@
 
 **Goal:** Minimal Mac time, maximum efficiency. **Mac = Apple-only work.** **PC = everything else.**
 
-**Repos:** `C:\dev\bleapp` (PC) · `~/dev/bleapp` (Mac) · same remote: `joelevy1/bleapp`
+**Repos:** `Boat-projects/ballast-app` (G Drive) · `C:\dev\ballast-app` (PC) · `~/dev/ballast-app` (Mac) · `joelevy1/ballast-app`
 
 ---
 

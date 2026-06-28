@@ -1,9 +1,9 @@
 # Ballast Monitor — debug & ship checklist
 
-Keep this file open in Cursor (`C:\dev\bleapp`). Check boxes as you go.
+Keep this file open in Cursor (`C:\dev\ballast-app`). Check boxes as you go.
 
-**PC repo path:** `C:\dev\bleapp`  
-**Mac repo path:** `~/dev/bleapp`  
+**PC repo path:** `C:\dev\ballast-app`  
+**Mac repo path:** `~/dev/ballast-app`  
 **Expo project:** [ballast-monitor](https://expo.dev) · bundle `com.joelevy.ballastmonitor`
 
 ---
@@ -12,16 +12,16 @@ Keep this file open in Cursor (`C:\dev\bleapp`). Check boxes as you go.
 
 ### 0A — PC (Windows)
 
-- [ ] Folder exists: `C:\dev\bleapp` (if `git clone` says “already exists”, that’s OK)
-- [ ] In PowerShell: `cd C:\dev\bleapp` then `npm ci` (completes without errors)
-- [ ] Cursor: **File → Open Folder** → `C:\dev\bleapp` (not Google Drive)
-- [ ] Verify git: `git remote -v` shows `joelevy1/bleapp`
+- [ ] Folder exists: `C:\dev\ballast-app` (if `git clone` says “already exists”, that’s OK)
+- [ ] In PowerShell: `cd C:\dev\ballast-app` then `npm ci` (completes without errors)
+- [ ] Cursor: **File → Open Folder** → `C:\dev\ballast-app` (not Google Drive)
+- [ ] Verify git: `git remote -v` shows `joelevy1/ballast-app`
 - [ ] Verify tip: `git log -1 --oneline`
 
 ### 0A — Mac (remote)
 
 - [ ] `mkdir -p ~/dev && cd ~/dev`
-- [ ] Clone or update: `cd bleapp && git pull` (or `git clone https://github.com/joelevy1/bleapp.git bleapp`)
+- [ ] Clone or update: `cd bleapp && git pull` (or `git clone https://github.com/joelevy1/ballast-app.git bleapp`)
 - [ ] Node 20 + `npm ci`
 - [ ] `cd ios && pod install && cd ..`
 - [ ] Xcode installed; **Xcode → Settings → Accounts** → your Apple team signed in
@@ -34,7 +34,7 @@ Keep this file open in Cursor (`C:\dev\bleapp`). Check boxes as you go.
 ### 0C — GitHub CLI (optional — skip is fine)
 
 - [ ] _(Optional)_ `winget install GitHub.cli` then `gh auth login`
-- [ ] Or use browser: https://github.com/joelevy1/bleapp/actions
+- [ ] Or use browser: https://github.com/joelevy1/ballast-app/actions
 
 ---
 
@@ -44,19 +44,19 @@ Keep this file open in Cursor (`C:\dev\bleapp`). Check boxes as you go.
 
 ### Before each Mac session
 
-- [ ] Mac: `cd ~/dev/bleapp && git pull`
+- [ ] Mac: `cd ~/dev/ballast-app && git pull`
 - [ ] Mac: `npm ci`
 - [ ] Mac: `cd ios && pod install && cd ..` (only if `ios/` or native deps changed)
 
 ### Run on iPhone (Mac)
 
 - [ ] iPhone USB → Trust Mac → **Developer Mode** on if iOS asks
-- [ ] Terminal 1: `cd ~/dev/bleapp && npx expo run:ios --device`  
+- [ ] Terminal 1: `cd ~/dev/ballast-app && npx expo run:ios --device`  
   _(or Xcode: `open ios/BallastMonitor.xcworkspace` → scheme **BallastMonitor** → your iPhone → **Run** ⌘R)_
 
 ### Metro (Mac)
 
-- [ ] Terminal 2: `cd ~/dev/bleapp && npx expo start`  
+- [ ] Terminal 2: `cd ~/dev/ballast-app && npx expo start`  
   _(different Wi‑Fi? use `npx expo start --tunnel`)_
 - [ ] Reload app; reproduce crash
 - [ ] Copy **redbox text** or **Metro terminal error** into chat / notes
@@ -145,7 +145,7 @@ Keep this file open in Cursor (`C:\dev\bleapp`). Check boxes as you go.
 ## Part 8 — Paste this when asking for help in Cursor
 
 ```
-PC: C:\dev\bleapp @ commit _______
+PC: C:\dev\ballast-app @ commit _______
 Mac pulled same commit: yes / no
 Build: Debug (Metro) / TestFlight build ___
 Metro or redbox error:
@@ -172,7 +172,7 @@ EAS OK: preview only / production / skip
 
 **PC**
 ```powershell
-cd C:\dev\bleapp
+cd C:\dev\ballast-app
 git pull
 npm ci
 git status
@@ -180,7 +180,7 @@ git status
 
 **Mac**
 ```bash
-cd ~/dev/bleapp
+cd ~/dev/ballast-app
 git pull
 npm ci
 cd ios && pod install && cd ..
@@ -192,5 +192,5 @@ npx expo start
 
 **Open Xcode workspace**
 ```bash
-open ~/dev/bleapp/ios/BallastMonitor.xcworkspace
+open ~/dev/ballast-app/ios/BallastMonitor.xcworkspace
 ```

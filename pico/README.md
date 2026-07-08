@@ -48,4 +48,4 @@ See **`main_ble_snippet.py`** for the full block.
 
 ## Sync to GitHub `ballast` repo
 
-These files mirror what should go in **joelevy1/ballast** for OTA (`ble_advertising.py`, `ble_service.py`, `main.py`).
+OTA source of truth: **`joelevy1/ballast-app`** → `pico/` (fetched by the iOS app over GitHub raw).

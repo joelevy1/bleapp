@@ -80,8 +80,8 @@ const VERSION_CHAR_UUID = '00002a26-0000-1000-8000-00805f9b34fb';
 const FILE_TRANSFER_UUID = '00002a6d-0000-1000-8000-00805f9b34fb';
 const FILE_CONTROL_UUID = '00002a6c-0000-1000-8000-00805f9b34fb';
 
-const GITHUB_COMMITS_URL = 'https://api.github.com/repos/joelevy1/ballast/commits/main';
-const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/joelevy1/ballast/main';
+const GITHUB_COMMITS_URL = 'https://api.github.com/repos/joelevy1/ballast-app/commits/main';
+const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/joelevy1/ballast-app/main/pico';
 const OTA_FILES = [
   'main.py',
   'main_wifi.py',

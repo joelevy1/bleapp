@@ -102,9 +102,15 @@ const STORAGE = {
   PULSES_PER_GAL: 'ballast_pulses_per_gal',
   POUNDS_PER_GAL: 'ballast_pounds_per_gal',
   TANK_MAX: 'ballast_tank_max',
+  TANK_CAPACITY_GAL: 'ballast_tank_capacity_gal',
+  TANK_EXPECTED_SECONDS: 'ballast_tank_expected_seconds',
+  TANK_PULSE_LOG: 'ballast_tank_pulse_log',
 };
 
 const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
+const PUMP_SPEC_GPM = 30;
+const COMBINED_PUMP_SPEC_GPM = PUMP_SPEC_GPM * 2;
+const MAX_PULSE_LOG_ENTRIES = 20;
 
 /** Calibrated from empty→overflow fill session (sum of both pumps per tank at full). */
 const DEFAULT_TANK_MAX = {
@@ -118,6 +124,18 @@ const LEGACY_DEFAULT_TANK_MAX = {
   starboard: 10000,
   mid: 10000,
   forward: 5000,
+};
+const DEFAULT_TANK_CAPACITY_GAL = {
+  port: 0,
+  starboard: 0,
+  mid: 87,
+  forward: 95,
+};
+const DEFAULT_TANK_EXPECTED_SECONDS = {
+  port: 0,
+  starboard: 0,
+  mid: 110,
+  forward: 145,
 };
 
 function tankMaxMatchesLegacyDefaults(o) {
@@ -198,6 +216,56 @@ function parseTankMaxDraft(draft, fallback) {
     if (Number.isFinite(n) && n > 0) next[key] = n;
   }
   return next;
+}
+
+function parseTankPositiveNumberDraft(draft, fallback, integer = false) {
+  const next = { ...fallback };
+  for (const name of TANK_NAMES) {
+    const key = name.toLowerCase();
+    const raw = draft?.[key];
+    if (raw === undefined || raw === '') {
+      next[key] = 0;
+      continue;
+    }
+    const n = integer ? parseInt(String(raw).replace(/,/g, ''), 10) : parseFloat(String(raw).replace(/,/g, ''));
+    if (Number.isFinite(n) && n >= 0) next[key] = n;
+  }
+  return next;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  const s = Math.max(1, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
+}
+
+function formatGpm(n) {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return `${n.toFixed(1)} GPM`;
+}
+
+function expectedGpmForTank(capacityGal, expectedSeconds) {
+  if (!Number.isFinite(capacityGal) || !Number.isFinite(expectedSeconds) || capacityGal <= 0 || expectedSeconds <= 0) {
+    return 0;
+  }
+  return (capacityGal * 60) / expectedSeconds;
+}
+
+function draftTankNumber(draft, fallback, key) {
+  const raw = draft?.[key];
+  if (raw === '') return 0;
+  if (raw !== undefined) {
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return fallback[key] || 0;
+}
+
+function pumpLabelsForTank(tankName) {
+  return tankName === 'Forward' ? ['Port', 'Mid'] : ['Top', 'Btm'];
 }
 
 /** Open app from Pushover / Safari with Pico IP (see ballast main_wifi notify_wifi_ip). */
@@ -370,7 +438,13 @@ export default function App() {
   const [versionDetailLoading, setVersionDetailLoading] = useState(false);
   const [versionCompareRows, setVersionCompareRows] = useState([]);
   const [tankMaxDraft, setTankMaxDraft] = useState(null);
+  const [tankCapacityValues, setTankCapacityValues] = useState(DEFAULT_TANK_CAPACITY_GAL);
+  const [tankExpectedSeconds, setTankExpectedSeconds] = useState(DEFAULT_TANK_EXPECTED_SECONDS);
+  const [tankCapacityDraft, setTankCapacityDraft] = useState(null);
+  const [tankExpectedSecondsDraft, setTankExpectedSecondsDraft] = useState(null);
+  const [pulseLogEntries, setPulseLogEntries] = useState([]);
   const [pumpAlertTanks, setPumpAlertTanks] = useState(() => new Set());
+  const [pumpAlertDetails, setPumpAlertDetails] = useState({});
   const [pumpAlertFlashOn, setPumpAlertFlashOn] = useState(true);
 
   const wifiPollRef = useRef(null);
@@ -389,12 +463,15 @@ export default function App() {
     const task = InteractionManager.runAfterInteractions(() => {
       (async () => {
         try {
-          const [ip, um, ppg, ppg2, tm] = await Promise.all([
+          const [ip, um, ppg, ppg2, tm, tc, ts, pl] = await Promise.all([
             AsyncStorage.getItem(STORAGE.WIFI_IP),
             AsyncStorage.getItem(STORAGE.UNIT_MODE),
             AsyncStorage.getItem(STORAGE.PULSES_PER_GAL),
             AsyncStorage.getItem(STORAGE.POUNDS_PER_GAL),
             AsyncStorage.getItem(STORAGE.TANK_MAX),
+            AsyncStorage.getItem(STORAGE.TANK_CAPACITY_GAL),
+            AsyncStorage.getItem(STORAGE.TANK_EXPECTED_SECONDS),
+            AsyncStorage.getItem(STORAGE.TANK_PULSE_LOG),
           ]);
           if (ip) {
             setWifiIpInput(ip);
@@ -417,6 +494,18 @@ export default function App() {
             } else if (o && typeof o === 'object') {
               setTankMaxValues((prev) => ({ ...prev, ...o }));
             }
+          }
+          if (tc) {
+            const o = JSON.parse(tc);
+            if (o && typeof o === 'object') setTankCapacityValues((prev) => ({ ...prev, ...o }));
+          }
+          if (ts) {
+            const o = JSON.parse(ts);
+            if (o && typeof o === 'object') setTankExpectedSeconds((prev) => ({ ...prev, ...o }));
+          }
+          if (pl) {
+            const rows = JSON.parse(pl);
+            if (Array.isArray(rows)) setPulseLogEntries(rows.slice(0, MAX_PULSE_LOG_ENTRIES));
           }
         } catch (e) {
           // ignore
@@ -457,12 +546,27 @@ export default function App() {
           return acc;
         }, {}),
       );
+      setTankCapacityDraft(
+        TANK_NAMES.reduce((acc, name) => {
+          const key = name.toLowerCase();
+          acc[key] = tankCapacityValues[key] ? String(tankCapacityValues[key]) : '';
+          return acc;
+        }, {}),
+      );
+      setTankExpectedSecondsDraft(
+        TANK_NAMES.reduce((acc, name) => {
+          const key = name.toLowerCase();
+          acc[key] = tankExpectedSeconds[key] ? String(tankExpectedSeconds[key]) : '';
+          return acc;
+        }, {}),
+      );
     }
-  }, [currentScreen]);
+  }, [currentScreen, tankCapacityValues, tankExpectedSeconds, tankMaxValues]);
 
   useEffect(() => {
     if (!isConnected) {
       setPumpAlertTanks(new Set());
+      setPumpAlertDetails({});
       flowHistoryRef.current = Object.fromEntries([...Array(8)].map((_, i) => [i, []]));
       lastFlowCountsRef.current = new Array(8).fill(0);
       lastFlowTickRef.current = 0;
@@ -484,6 +588,7 @@ export default function App() {
     }
 
     const alerts = new Set();
+    const details = {};
     for (const tank of TANK_CONFIG) {
       const [p1, p2] = tank.pumps;
       const h1 = flowHistoryRef.current[p1];
@@ -493,11 +598,26 @@ export default function App() {
       const f2 = h2.reduce((a, b) => a + b, 0) / h2.length;
       const r1 = f1 > MIN_FLOW_RATE_GPM;
       const r2 = f2 > MIN_FLOW_RATE_GPM;
-      if (r1 !== r2) alerts.add(tank.name);
+      const [label1, label2] = pumpLabelsForTank(tank.name);
+      if (r1 !== r2) {
+        alerts.add(tank.name);
+        details[tank.name] = `${r1 ? label2 : label1} pump is not showing flow`;
+        continue;
+      }
+      const key = tank.name.toLowerCase();
+      const expectedGpm = expectedGpmForTank(tankCapacityValues[key], tankExpectedSeconds[key]);
+      if (r1 && r2 && expectedGpm > 0) {
+        const totalGpm = f1 + f2;
+        if (totalGpm < expectedGpm * 0.6) {
+          alerts.add(tank.name);
+          details[tank.name] = `Low flow: ${formatGpm(totalGpm)} vs ${formatGpm(expectedGpm)} expected`;
+        }
+      }
     }
     setPumpAlertTanks(alerts);
+    setPumpAlertDetails(details);
     return undefined;
-  }, [flowValues, isConnected, pulsesPerGallon]);
+  }, [flowValues, isConnected, pulsesPerGallon, tankCapacityValues, tankExpectedSeconds]);
 
   useEffect(() => {
     if (pumpAlertTanks.size === 0) {
@@ -538,6 +658,24 @@ export default function App() {
         forward: Number(tm.forward) > 0 ? Number(tm.forward) : prev.forward,
       }));
     }
+    if (s.tank_capacity_gal && typeof s.tank_capacity_gal === 'object') {
+      const tc = s.tank_capacity_gal;
+      setTankCapacityValues((prev) => ({
+        port: Number(tc.port) > 0 ? Number(tc.port) : prev.port,
+        starboard: Number(tc.starboard) > 0 ? Number(tc.starboard) : prev.starboard,
+        mid: Number(tc.mid) > 0 ? Number(tc.mid) : prev.mid,
+        forward: Number(tc.forward) > 0 ? Number(tc.forward) : prev.forward,
+      }));
+    }
+    if (s.tank_expected_seconds && typeof s.tank_expected_seconds === 'object') {
+      const ts = s.tank_expected_seconds;
+      setTankExpectedSeconds((prev) => ({
+        port: Number(ts.port) > 0 ? Number(ts.port) : prev.port,
+        starboard: Number(ts.starboard) > 0 ? Number(ts.starboard) : prev.starboard,
+        mid: Number(ts.mid) > 0 ? Number(ts.mid) : prev.mid,
+        forward: Number(ts.forward) > 0 ? Number(ts.forward) : prev.forward,
+      }));
+    }
     if (typeof s.is_fill_mode === 'boolean') setIsFillMode(s.is_fill_mode);
     if (s.tank_fill && typeof s.tank_fill === 'object') {
       const tf = s.tank_fill;
@@ -553,11 +691,21 @@ export default function App() {
   const saveSettingsToStorage = useCallback(async () => {
     try {
       const nextTankMax = tankMaxDraft ? parseTankMaxDraft(tankMaxDraft, tankMaxValues) : tankMaxValues;
+      const nextTankCapacity = tankCapacityDraft
+        ? parseTankPositiveNumberDraft(tankCapacityDraft, tankCapacityValues, false)
+        : tankCapacityValues;
+      const nextTankExpectedSeconds = tankExpectedSecondsDraft
+        ? parseTankPositiveNumberDraft(tankExpectedSecondsDraft, tankExpectedSeconds, true)
+        : tankExpectedSeconds;
       setTankMaxValues(nextTankMax);
+      setTankCapacityValues(nextTankCapacity);
+      setTankExpectedSeconds(nextTankExpectedSeconds);
       await AsyncStorage.setItem(STORAGE.UNIT_MODE, unitMode);
       await AsyncStorage.setItem(STORAGE.PULSES_PER_GAL, String(pulsesPerGallon));
       await AsyncStorage.setItem(STORAGE.POUNDS_PER_GAL, String(poundsPerGallon));
       await AsyncStorage.setItem(STORAGE.TANK_MAX, JSON.stringify(nextTankMax));
+      await AsyncStorage.setItem(STORAGE.TANK_CAPACITY_GAL, JSON.stringify(nextTankCapacity));
+      await AsyncStorage.setItem(STORAGE.TANK_EXPECTED_SECONDS, JSON.stringify(nextTankExpectedSeconds));
       if (connectionMode === 'wifi' && wifiBase) {
         const res = await fetchWithTimeout(
           `http://${wifiBase}/api/settings`,
@@ -569,6 +717,8 @@ export default function App() {
               pulses_per_gallon: pulsesPerGallon,
               pounds_per_gallon: poundsPerGallon,
               tank_max: nextTankMax,
+              tank_capacity_gal: nextTankCapacity,
+              tank_expected_seconds: nextTankExpectedSeconds,
               is_fill_mode: isFillMode,
               tank_fill: tankFillModes,
             }),
@@ -592,6 +742,10 @@ export default function App() {
     poundsPerGallon,
     tankMaxValues,
     tankMaxDraft,
+    tankCapacityValues,
+    tankCapacityDraft,
+    tankExpectedSeconds,
+    tankExpectedSecondsDraft,
     connectionMode,
     wifiBase,
     isFillMode,
@@ -999,6 +1153,29 @@ export default function App() {
     return Math.min(100, Math.max(0, pct));
   };
 
+  const getTankFillFraction = (tankName) => {
+    const maxP = tankMaxValues[tankName.toLowerCase()];
+    if (!maxP) return 0;
+    return Math.min(1, Math.max(0, getTankTotalPulses(tankName) / maxP));
+  };
+
+  const getTankEtaSeconds = (tankName) => {
+    const key = tankName.toLowerCase();
+    const expectedSeconds = Number(tankExpectedSeconds[key]);
+    if (!Number.isFinite(expectedSeconds) || expectedSeconds <= 0) return 0;
+    const fillFraction = getTankFillFraction(tankName);
+    const remainingFraction = tankFillModes[tankName] ? 1 - fillFraction : fillFraction;
+    return expectedSeconds * Math.min(1, Math.max(0, remainingFraction));
+  };
+
+  const getTankExpectedRateText = (tankName) => {
+    const key = tankName.toLowerCase();
+    const expectedGpm = expectedGpmForTank(tankCapacityValues[key], tankExpectedSeconds[key]);
+    if (!expectedGpm) return '';
+    const specPct = Math.round((expectedGpm / COMBINED_PUMP_SPEC_GPM) * 100);
+    return `${formatGpm(expectedGpm)} expected (${specPct}% of 2-pump spec)`;
+  };
+
   const formatPumpValue = (pumpIdx, tankName) => {
     return convertValue(flowValues[pumpIdx]);
   };
@@ -1105,6 +1282,37 @@ export default function App() {
     const next = { ...tankMaxValues, [key]: Math.max(1, totalPulses) };
     await persistTankMax(next);
     Alert.alert('Set Full', `${tankName} max set to ${totalPulses} pulses`);
+  };
+
+  const logTankPulses = async (tankName) => {
+    const tank = TANK_CONFIG.find((t) => t.name === tankName);
+    if (!tank) return;
+    const key = tankName.toLowerCase();
+    const pumpPulses = tank.pumps.map((idx) => flowValues[idx] || 0);
+    const totalPulses = pumpPulses.reduce((sum, n) => sum + n, 0);
+    const entry = {
+      id: Date.now(),
+      at: new Date().toISOString(),
+      tank: tankName,
+      mode: tankFillModes[tankName] ? 'fill' : 'drain',
+      totalPulses,
+      pumpPulses,
+      percent: getTankPercentDisplay(tankName),
+      capacityGal: tankCapacityValues[key] || 0,
+      expectedSeconds: tankExpectedSeconds[key] || 0,
+    };
+    const next = [entry, ...pulseLogEntries].slice(0, MAX_PULSE_LOG_ENTRIES);
+    setPulseLogEntries(next);
+    await AsyncStorage.setItem(STORAGE.TANK_PULSE_LOG, JSON.stringify(next));
+    Alert.alert(
+      'Logged sample',
+      `${tankName}: ${totalPulses} pulses (${pumpPulses.join(' + ')}) at ${entry.percent}% ${entry.mode}`,
+    );
+  };
+
+  const clearPulseLog = async () => {
+    setPulseLogEntries([]);
+    await AsyncStorage.removeItem(STORAGE.TANK_PULSE_LOG);
   };
 
   const setTankFillMode = (tankName, fill) => {
@@ -1664,6 +1872,78 @@ export default function App() {
             </View>
           ))}
 
+          <Text style={styles.sectionTitle}>Tank capacity (gallons)</Text>
+          <Text style={styles.settingsHint}>
+            Used for ETA and flow checks. MID/FWD are seeded from your measured fills; leave Port/STBD blank until measured.
+          </Text>
+          {TANK_NAMES.map((name) => (
+            <View key={name} style={styles.tankMaxRow}>
+              <Text style={styles.tankMaxLabel}>{name}</Text>
+              <TextInput
+                style={styles.tankMaxInput}
+                keyboardType="decimal-pad"
+                placeholder="unknown"
+                value={tankCapacityDraft?.[name.toLowerCase()] ?? ''}
+                onChangeText={(t) => {
+                  const key = name.toLowerCase();
+                  if (/^\d*\.?\d*$/.test(t)) {
+                    setTankCapacityDraft((prev) => ({ ...(prev || {}), [key]: t }));
+                  }
+                }}
+              />
+            </View>
+          ))}
+
+          <Text style={styles.sectionTitle}>Expected full-tank time (seconds)</Text>
+          <Text style={styles.settingsHint}>
+            Based on real-world two-pump fill/drain time. Spec reference: 30 GPM per pump / {COMBINED_PUMP_SPEC_GPM} GPM
+            combined at ideal test conditions.
+          </Text>
+          {TANK_NAMES.map((name) => {
+            const key = name.toLowerCase();
+            const expected = expectedGpmForTank(
+              draftTankNumber(tankCapacityDraft, tankCapacityValues, key),
+              draftTankNumber(tankExpectedSecondsDraft, tankExpectedSeconds, key),
+            );
+            return (
+              <View key={name} style={styles.tankMaxRow}>
+                <Text style={styles.tankMaxLabel}>{name}</Text>
+                <TextInput
+                  style={styles.tankMaxInput}
+                  keyboardType="number-pad"
+                  placeholder="unknown"
+                  value={tankExpectedSecondsDraft?.[key] ?? ''}
+                  onChangeText={(t) => {
+                    if (/^\d*$/.test(t)) {
+                      setTankExpectedSecondsDraft((prev) => ({ ...(prev || {}), [key]: t }));
+                    }
+                  }}
+                />
+                <Text style={styles.expectedRateText}>{formatGpm(expected)}</Text>
+              </View>
+            );
+          })}
+
+          <Text style={styles.sectionTitle}>Calibration samples</Text>
+          <Text style={styles.settingsHint}>
+            Use the Log button on a tank card at full/empty checkpoints to capture total pulses for later tuning.
+          </Text>
+          {pulseLogEntries.length === 0 ? (
+            <Text style={styles.settingsText}>No samples logged yet.</Text>
+          ) : (
+            pulseLogEntries.map((entry) => (
+              <Text key={entry.id} style={styles.pulseLogText}>
+                {entry.tank} {entry.mode} • {entry.totalPulses} pulses ({entry.pumpPulses?.join(' + ')}) • {entry.percent}% •{' '}
+                {new Date(entry.at).toLocaleString()}
+              </Text>
+            ))
+          )}
+          {pulseLogEntries.length > 0 ? (
+            <TouchableOpacity style={styles.secondaryBtn} onPress={clearPulseLog}>
+              <Text style={styles.secondaryBtnText}>Clear calibration samples</Text>
+            </TouchableOpacity>
+          ) : null}
+
           <TouchableOpacity style={styles.saveButton} onPress={saveSettingsToStorage}>
             <Text style={styles.saveButtonText}>Save</Text>
           </TouchableOpacity>
@@ -1789,10 +2069,12 @@ export default function App() {
           {TANK_CONFIG.map((tank, tankIdx) => {
             const [pump1Idx, pump2Idx] = tank.pumps;
             const [color1, color2] = tank.color.split('/');
-            const pump1Label = tank.name === 'Forward' ? 'Port' : 'Top';
-            const pump2Label = tank.name === 'Forward' ? 'Mid' : 'Btm';
+            const [pump1Label, pump2Label] = pumpLabelsForTank(tank.name);
             const fillOn = tankFillModes[tank.name];
             const pumpAlert = pumpAlertTanks.has(tank.name);
+            const etaText = formatDuration(getTankEtaSeconds(tank.name));
+            const expectedRateText = getTankExpectedRateText(tank.name);
+            const pumpAlertDetail = pumpAlertDetails[tank.name];
             return (
               <View
                 key={tankIdx}
@@ -1816,6 +2098,13 @@ export default function App() {
                   <Text style={styles.tankName}>{tank.name}</Text>
                   <Text style={styles.tankPercent}>{getTankPercentDisplay(tank.name)}%</Text>
                 </View>
+                {etaText ? (
+                  <Text style={styles.tankEta}>
+                    ETA {etaText} {fillOn ? 'to full' : 'to empty'}
+                  </Text>
+                ) : null}
+                {expectedRateText ? <Text style={styles.tankRateHint}>{expectedRateText}</Text> : null}
+                {pumpAlertDetail ? <Text style={styles.pumpAlertBanner}>{pumpAlertDetail}</Text> : null}
                 <View style={styles.pumpRow}>
                   <TouchableOpacity style={styles.pumpSemiReset} onPress={() => resetPump(pump1Idx)} accessibilityLabel={`Reset ${pump1Label.toLowerCase()} pump`}>
                     <Text style={styles.semiResetText}>↻</Text>
@@ -1841,6 +2130,9 @@ export default function App() {
                 <View style={styles.tankBottomRow}>
                   <TouchableOpacity style={styles.tankWideReset} onPress={() => resetTank(tank.name)} accessibilityLabel="Reset both pumps for this tank">
                     <Text style={styles.semiResetText}>↻ Tank</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.logSampleBtn} onPress={() => logTankPulses(tank.name)}>
+                    <Text style={styles.logSampleBtnText}>Log</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.setFullBtn} onPress={() => setTankFull(tank.name)}>
                     <Text style={styles.setFullBtnText}>Set Full</Text>
@@ -1935,6 +2227,8 @@ const styles = StyleSheet.create({
   tankTitleRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   tankName: { fontSize: 15, ...FW600 },
   tankPercent: { fontSize: 13, color: '#666' },
+  tankEta: { fontSize: 11, color: '#1565C0', marginBottom: 2, ...FW600 },
+  tankRateHint: { fontSize: 9, color: '#777', marginBottom: 6 },
   pumpRow: { flexDirection: 'row', alignItems: 'stretch', marginBottom: 6 },
   pumpSemiReset: {
     width: 36,
@@ -1967,6 +2261,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   semiResetText: { fontSize: 14, color: '#666' },
+  logSampleBtn: { paddingVertical: 6, paddingHorizontal: 9, backgroundColor: '#FFFDE7', borderRadius: 6, borderWidth: 1, borderColor: '#FBC02D', marginRight: 6 },
+  logSampleBtnText: { fontSize: 11, color: '#795548', ...FW600 },
   setFullBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#ddd' },
   setFullBtnText: { fontSize: 11, color: '#333' },
   totalCard: { margin: 12, backgroundColor: '#E3F2FD', borderRadius: 12, padding: 16, alignItems: 'center' },
@@ -1992,6 +2288,8 @@ const styles = StyleSheet.create({
   tankMaxRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   tankMaxLabel: { width: 100, fontSize: 14 },
   tankMaxInput: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 8, fontSize: 15 },
+  expectedRateText: { width: 74, marginLeft: 8, fontSize: 11, color: '#666', textAlign: 'right' },
+  pulseLogText: { fontSize: 11, color: '#444', marginBottom: 5, lineHeight: 15 },
   secondaryBtn: { marginTop: 8, padding: 12, backgroundColor: '#E3F2FD', borderRadius: 8, alignItems: 'center' },
   secondaryBtnDisabled: { opacity: 0.45 },
   secondaryBtnText: { color: '#1565C0', ...FW600 },

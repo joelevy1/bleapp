@@ -1,11 +1,11 @@
 {
-  "release": "4-19-2026-v1.3",
+  "release": "7-17-2026-v1.5",
   "files": {
-    "main.py": "4-19-2026-v1.3",
-    "main_wifi.py": "4-19-2026-v1.3",
-    "ble_service.py": "4-19-2026-v1.3",
-    "ble_advertising.py": "4-19-2026-v1.3",
-    "flow_meters.py": "4-19-2026-v1.3",
-    "config.py": "4-19-2026-v1.3"
+    "main.py": "7-17-2026-v1.5",
+    "main_wifi.py": "7-17-2026-v1.5",
+    "ble_service.py": "7-17-2026-v1.5",
+    "ble_advertising.py": "7-17-2026-v1.5",
+    "flow_meters.py": "7-17-2026-v1.5",
+    "config.py": "7-17-2026-v1.5"
   }
 }

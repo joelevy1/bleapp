@@ -1,6 +1,6 @@
 """
 Ballast Flow Meter Monitor - WiFi Web Version v3.0
-Version: 4-19-2026-v1.3
+Version: 7-17-2026-v1.5
 Features: iOS-aligned UI, settings on Pico, pump alerts, GitHub OTA
 """
 
@@ -49,6 +49,8 @@ def _default_settings():
         "is_fill_mode": True,
         "tank_fill": {"Port": True, "Starboard": True, "Mid": True, "Forward": True},
         "tank_max": TANK_MAX_DEFAULTS.copy(),
+        "tank_capacity_gal": {"port": 0, "starboard": 0, "mid": 87, "forward": 95},
+        "tank_expected_seconds": {"port": 0, "starboard": 0, "mid": 110, "forward": 145},
         "calibration": [0] * 8,
     }
 
@@ -70,6 +72,12 @@ def migrate_settings(s):
     for key in ("port", "starboard", "mid", "forward"):
         if key not in s["tank_max"]:
             s["tank_max"][key] = d["tank_max"][key]
+    for group in ("tank_capacity_gal", "tank_expected_seconds"):
+        if group not in s or not isinstance(s.get(group), dict):
+            s[group] = d[group].copy()
+        for key in ("port", "starboard", "mid", "forward"):
+            if key not in s[group]:
+                s[group][key] = d[group][key]
     cal = s.get("calibration")
     if not isinstance(cal, list) or len(cal) < 8:
         s["calibration"] = [0] * 8
@@ -121,6 +129,8 @@ def settings_for_api():
         "pounds_per_gallon": settings["pounds_per_gallon"],
         "unit_mode": settings["unit_mode"],
         "tank_max": settings["tank_max"].copy(),
+        "tank_capacity_gal": settings["tank_capacity_gal"].copy(),
+        "tank_expected_seconds": settings["tank_expected_seconds"].copy(),
         "is_fill_mode": settings["is_fill_mode"],
         "tank_fill": settings["tank_fill"].copy(),
     }
@@ -159,6 +169,16 @@ def apply_settings_from_json(data):
                         settings["tank_max"][k] = n
                 except (TypeError, ValueError):
                     pass
+    for group in ("tank_capacity_gal", "tank_expected_seconds"):
+        if group in data and isinstance(data[group], dict):
+            for k in ("port", "starboard", "mid", "forward"):
+                if k in data[group]:
+                    try:
+                        n = float(data[group][k])
+                        if n >= 0:
+                            settings[group][k] = int(n) if group == "tank_expected_seconds" else n
+                    except (TypeError, ValueError):
+                        pass
     save_settings()
     return True
 

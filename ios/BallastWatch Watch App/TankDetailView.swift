@@ -10,6 +10,8 @@ struct TankDetailView: View {
         let fill = WatchContextReader.intKey(tank.fillKey, in: ctx)
         let unit = (ctx["unitLabel"] as? String) ?? "gal"
         let isFill = WatchContextReader.boolKey(tank.fillModeKey, in: ctx, default: true)
+        let topLabel = tank == .forward ? "Port" : "Top"
+        let btmLabel = tank == .forward ? "Mid" : "Btm"
 
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
@@ -28,8 +30,8 @@ struct TankDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Text("Top: \(WatchContextReader.stringKey(tank.topKey, in: ctx)) \(unit)")
-                Text("Btm: \(WatchContextReader.stringKey(tank.btmKey, in: ctx)) \(unit)")
+                Text("\(topLabel): \(WatchContextReader.stringKey(tank.topKey, in: ctx)) \(unit)")
+                Text("\(btmLabel): \(WatchContextReader.stringKey(tank.btmKey, in: ctx)) \(unit)")
                 Text("Tank total: \(WatchContextReader.stringKey(tank.dispKey, in: ctx)) \(unit)")
                     .font(.caption)
                     .foregroundStyle(.secondary)

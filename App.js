@@ -1789,6 +1789,8 @@ export default function App() {
           {TANK_CONFIG.map((tank, tankIdx) => {
             const [pump1Idx, pump2Idx] = tank.pumps;
             const [color1, color2] = tank.color.split('/');
+            const pump1Label = tank.name === 'Forward' ? 'Port' : 'Top';
+            const pump2Label = tank.name === 'Forward' ? 'Mid' : 'Btm';
             const fillOn = tankFillModes[tank.name];
             const pumpAlert = pumpAlertTanks.has(tank.name);
             return (
@@ -1815,22 +1817,22 @@ export default function App() {
                   <Text style={styles.tankPercent}>{getTankPercentDisplay(tank.name)}%</Text>
                 </View>
                 <View style={styles.pumpRow}>
-                  <TouchableOpacity style={styles.pumpSemiReset} onPress={() => resetPump(pump1Idx)} accessibilityLabel="Reset top pump">
+                  <TouchableOpacity style={styles.pumpSemiReset} onPress={() => resetPump(pump1Idx)} accessibilityLabel={`Reset ${pump1Label.toLowerCase()} pump`}>
                     <Text style={styles.semiResetText}>↻</Text>
                   </TouchableOpacity>
                   <View style={styles.pumpMain}>
-                    <Text style={styles.pumpLabel}>Top ({color1})</Text>
+                    <Text style={styles.pumpLabel}>{pump1Label} ({color1})</Text>
                     <Text style={styles.pumpValue}>
                       {formatPumpValue(pump1Idx, tank.name)} {getUnitLabel()}
                     </Text>
                   </View>
                 </View>
                 <View style={styles.pumpRow}>
-                  <TouchableOpacity style={styles.pumpSemiReset} onPress={() => resetPump(pump2Idx)} accessibilityLabel="Reset bottom pump">
+                  <TouchableOpacity style={styles.pumpSemiReset} onPress={() => resetPump(pump2Idx)} accessibilityLabel={`Reset ${pump2Label.toLowerCase()} pump`}>
                     <Text style={styles.semiResetText}>↻</Text>
                   </TouchableOpacity>
                   <View style={styles.pumpMain}>
-                    <Text style={styles.pumpLabel}>Btm ({color2})</Text>
+                    <Text style={styles.pumpLabel}>{pump2Label} ({color2})</Text>
                     <Text style={styles.pumpValue}>
                       {formatPumpValue(pump2Idx, tank.name)} {getUnitLabel()}
                     </Text>

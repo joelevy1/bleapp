@@ -1,10 +1,10 @@
 """
 Configuration for Ballast Monitor
-Version: 7-17-2026-v1.5
+Version: 7-19-2026-v1.6
 """
 
 # System version
-VERSION = "7-17-2026-v1.5"
+VERSION = "7-19-2026-v1.6"
 
 
 def read_py_file_version(filename):

@@ -1,6 +1,6 @@
 """
 Ballast Flow Meter Monitor - WiFi Web Version v3.0
-Version: 7-17-2026-v1.5
+Version: 7-19-2026-v1.6
 Features: iOS-aligned UI, settings on Pico, pump alerts, GitHub OTA
 """
 
@@ -49,8 +49,8 @@ def _default_settings():
         "is_fill_mode": True,
         "tank_fill": {"Port": True, "Starboard": True, "Mid": True, "Forward": True},
         "tank_max": TANK_MAX_DEFAULTS.copy(),
-        "tank_capacity_gal": {"port": 0, "starboard": 0, "mid": 87, "forward": 95},
-        "tank_expected_seconds": {"port": 0, "starboard": 0, "mid": 110, "forward": 145},
+        "tank_capacity_gal": {"port": 122, "starboard": 122, "mid": 87, "forward": 95},
+        "tank_expected_seconds": {"port": 240, "starboard": 240, "mid": 110, "forward": 145},
         "calibration": [0] * 8,
     }
 

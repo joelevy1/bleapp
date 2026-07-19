@@ -111,6 +111,22 @@ const TANK_NAMES = ['Port', 'Starboard', 'Mid', 'Forward'];
 const PUMP_SPEC_GPM = 30;
 const COMBINED_PUMP_SPEC_GPM = PUMP_SPEC_GPM * 2;
 const MAX_PULSE_LOG_ENTRIES = 20;
+const COMPOUND_TANKS = {
+  port: {
+    hardGal: 95,
+    bagGal: 27,
+    residualGal: 5,
+    hardSeconds: 120,
+    fullSeconds: 240,
+  },
+  starboard: {
+    hardGal: 95,
+    bagGal: 27,
+    residualGal: 5,
+    hardSeconds: 120,
+    fullSeconds: 240,
+  },
+};
 
 /** Calibrated from empty→overflow fill session (sum of both pumps per tank at full). */
 const DEFAULT_TANK_MAX = {
@@ -126,14 +142,14 @@ const LEGACY_DEFAULT_TANK_MAX = {
   forward: 5000,
 };
 const DEFAULT_TANK_CAPACITY_GAL = {
-  port: 0,
-  starboard: 0,
+  port: 122,
+  starboard: 122,
   mid: 87,
   forward: 95,
 };
 const DEFAULT_TANK_EXPECTED_SECONDS = {
-  port: 0,
-  starboard: 0,
+  port: 240,
+  starboard: 240,
   mid: 110,
   forward: 145,
 };
@@ -262,6 +278,10 @@ function draftTankNumber(draft, fallback, key) {
     return Number.isFinite(n) ? n : 0;
   }
   return fallback[key] || 0;
+}
+
+function compoundTankInfo(tankName) {
+  return COMPOUND_TANKS[tankName.toLowerCase()] || null;
 }
 
 function pumpLabelsForTank(tankName) {
@@ -446,11 +466,13 @@ export default function App() {
   const [pumpAlertTanks, setPumpAlertTanks] = useState(() => new Set());
   const [pumpAlertDetails, setPumpAlertDetails] = useState({});
   const [pumpAlertFlashOn, setPumpAlertFlashOn] = useState(true);
+  const [firmwareNotice, setFirmwareNotice] = useState(null);
 
   const wifiPollRef = useRef(null);
   const flowHistoryRef = useRef(Object.fromEntries([...Array(8)].map((_, i) => [i, []])));
   const lastFlowCountsRef = useRef(new Array(8).fill(0));
   const lastFlowTickRef = useRef(0);
+  const autoFirmwareCheckRef = useRef('');
 
   const TANK_CONFIG = [
     { name: 'Port', pumps: [1, 2], color: 'White/Green' },
@@ -1164,8 +1186,67 @@ export default function App() {
     const expectedSeconds = Number(tankExpectedSeconds[key]);
     if (!Number.isFinite(expectedSeconds) || expectedSeconds <= 0) return 0;
     const fillFraction = getTankFillFraction(tankName);
+    const info = compoundTankInfo(tankName);
+    if (info && !tankFillModes[tankName]) {
+      const totalGal = tankCapacityValues[key] || info.hardGal + info.bagGal;
+      const residualFraction = totalGal > 0 ? Math.min(0.5, info.residualGal / totalGal) : 0;
+      const drainableFraction = Math.max(0, fillFraction - residualFraction);
+      return expectedSeconds * drainableFraction;
+    }
     const remainingFraction = tankFillModes[tankName] ? 1 - fillFraction : fillFraction;
     return expectedSeconds * Math.min(1, Math.max(0, remainingFraction));
+  };
+
+  const getTankEtaSuffix = (tankName) => {
+    const info = compoundTankInfo(tankName);
+    if (info) return tankFillModes[tankName] ? 'to full ballast' : 'to mostly drained';
+    return tankFillModes[tankName] ? 'to full' : 'to empty';
+  };
+
+  const getCompoundTankStatus = (tankName) => {
+    const info = compoundTankInfo(tankName);
+    if (!info) return null;
+    const key = tankName.toLowerCase();
+    const totalGal = tankCapacityValues[key] || info.hardGal + info.bagGal;
+    if (!totalGal) return null;
+    const hardFraction = Math.min(0.95, Math.max(0.1, info.hardGal / totalGal));
+    const residualFraction = Math.min(0.5, info.residualGal / totalGal);
+    const fillFraction = getTankFillFraction(tankName);
+    const hardPct = Math.min(100, Math.round((fillFraction / hardFraction) * 100));
+    const bagPct =
+      fillFraction <= hardFraction
+        ? 0
+        : Math.min(100, Math.round(((fillFraction - hardFraction) / (1 - hardFraction)) * 100));
+
+    if (tankFillModes[tankName]) {
+      if (fillFraction < hardFraction) {
+        return {
+          title: `Hard tank ${hardPct}%`,
+          detail: `Hard stage ~${formatDuration(info.hardSeconds)}; bag not filling yet`,
+        };
+      }
+      return {
+        title: `Hard full • Bag ${bagPct}%`,
+        detail: `Overflow expected; full ballast ~${formatDuration(info.fullSeconds)}`,
+      };
+    }
+
+    if (fillFraction <= residualFraction + 0.02) {
+      return {
+        title: 'Mostly drained',
+        detail: `Bag may retain ~${info.residualGal} gal`,
+      };
+    }
+    if (fillFraction > hardFraction) {
+      return {
+        title: `Bag + hard tank draining`,
+        detail: 'Bag drains unevenly back into hard tank',
+      };
+    }
+    return {
+      title: `Hard tank draining`,
+      detail: `Residual bag water may remain`,
+    };
   };
 
   const getTankExpectedRateText = (tankName) => {
@@ -1654,6 +1735,45 @@ export default function App() {
     }
   };
 
+  const runAutoFirmwareCheck = useCallback(async () => {
+    try {
+      let local = await fetchPicoVersionNow();
+      local = (local && String(local).trim()) || String(picoVersion || '').replace(/\0/g, '').trim();
+      if (!local) return;
+      const manifest = await fetchFirmwareManifest();
+      if (!manifestIsUsable(manifest)) return;
+      const githubTag = String(manifest.release ?? manifest.bundle_version ?? '').trim();
+      if (!firmwareNeedsUpdate(local, manifest)) {
+        setFirmwareNotice(null);
+        return;
+      }
+      setFirmwareNotice({
+        device: local,
+        githubTag,
+        message: githubTag
+          ? `Device ${local} • GitHub ${githubTag}`
+          : `Device ${local} does not match GitHub Pico files`,
+      });
+    } catch (_) {
+      /* Auto-check should never interrupt using the ballast controls. */
+    }
+  }, [fetchPicoVersionNow, picoVersion]);
+
+  useEffect(() => {
+    if (!isConnected || !connectionMode) {
+      autoFirmwareCheckRef.current = '';
+      setFirmwareNotice(null);
+      return undefined;
+    }
+    const key = `${connectionMode}:${device?.id || wifiBase || 'connected'}`;
+    if (autoFirmwareCheckRef.current === key) return undefined;
+    autoFirmwareCheckRef.current = key;
+    const t = setTimeout(() => {
+      runAutoFirmwareCheck();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [isConnected, connectionMode, device?.id, wifiBase, runAutoFirmwareCheck]);
+
   const handleWatchToggleFillDrain = useCallback(() => {
     setIsFillMode((prev) => {
       const next = !prev;
@@ -1874,7 +1994,8 @@ export default function App() {
 
           <Text style={styles.sectionTitle}>Tank capacity (gallons)</Text>
           <Text style={styles.settingsHint}>
-            Used for ETA and flow checks. MID/FWD are seeded from your measured fills; leave Port/STBD blank until measured.
+            Used for ETA and flow checks. Port/STBD default to 95 gal hard tank + 27 gal overflow bag; adjust as you
+            collect better real-world samples.
           </Text>
           {TANK_NAMES.map((name) => (
             <View key={name} style={styles.tankMaxRow}>
@@ -1897,7 +2018,8 @@ export default function App() {
           <Text style={styles.sectionTitle}>Expected full-tank time (seconds)</Text>
           <Text style={styles.settingsHint}>
             Based on real-world two-pump fill/drain time. Spec reference: 30 GPM per pump / {COMBINED_PUMP_SPEC_GPM} GPM
-            combined at ideal test conditions.
+            combined at ideal test conditions. Port/STBD use approximate full ballast time, including overflow loss while
+            the bag fills.
           </Text>
           {TANK_NAMES.map((name) => {
             const key = name.toLowerCase();
@@ -2047,6 +2169,34 @@ export default function App() {
         ) : null}
       </View>
 
+      {firmwareNotice ? (
+        <View style={styles.firmwareBanner}>
+          <View style={styles.firmwareBannerTextWrap}>
+            <Text style={styles.firmwareBannerTitle}>Pico files update available</Text>
+            <Text style={styles.firmwareBannerText}>{firmwareNotice.message}</Text>
+          </View>
+          <View style={styles.firmwareBannerActions}>
+            <TouchableOpacity style={styles.firmwareBannerBtn} onPress={checkFirmwareUpdates}>
+              <Text style={styles.firmwareBannerBtnText}>Review</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.firmwareBannerBtn, otaProgress != null && styles.firmwareBannerBtnDisabled]}
+              disabled={otaProgress != null}
+              onPress={() => {
+                if (connectionMode === 'ble') runFirmwareUpdateBle();
+                else if (connectionMode === 'wifi') runFirmwareUpdateWifi();
+                else Alert.alert('Firmware', 'Connect via BLE or WiFi first.');
+              }}
+            >
+              <Text style={styles.firmwareBannerBtnText}>Update</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.firmwareBannerDismiss} onPress={() => setFirmwareNotice(null)}>
+              <Text style={styles.firmwareBannerDismissText}>×</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.statusBar}>
         <View style={styles.fillDrainRow}>
           <TouchableOpacity
@@ -2073,8 +2223,10 @@ export default function App() {
             const fillOn = tankFillModes[tank.name];
             const pumpAlert = pumpAlertTanks.has(tank.name);
             const etaText = formatDuration(getTankEtaSeconds(tank.name));
+            const etaSuffix = getTankEtaSuffix(tank.name);
             const expectedRateText = getTankExpectedRateText(tank.name);
             const pumpAlertDetail = pumpAlertDetails[tank.name];
+            const compoundStatus = getCompoundTankStatus(tank.name);
             return (
               <View
                 key={tankIdx}
@@ -2100,8 +2252,14 @@ export default function App() {
                 </View>
                 {etaText ? (
                   <Text style={styles.tankEta}>
-                    ETA {etaText} {fillOn ? 'to full' : 'to empty'}
+                    ETA {etaText} {etaSuffix}
                   </Text>
+                ) : null}
+                {compoundStatus ? (
+                  <View style={styles.compoundTankBadge}>
+                    <Text style={styles.compoundTankTitle}>{compoundStatus.title}</Text>
+                    <Text style={styles.compoundTankDetail}>{compoundStatus.detail}</Text>
+                  </View>
                 ) : null}
                 {expectedRateText ? <Text style={styles.tankRateHint}>{expectedRateText}</Text> : null}
                 {pumpAlertDetail ? <Text style={styles.pumpAlertBanner}>{pumpAlertDetail}</Text> : null}
@@ -2179,6 +2337,32 @@ const styles = StyleSheet.create({
   headerTitle: { color: 'white', fontSize: 20, ...FW500 },
   headerSignal: { color: 'rgba(255,255,255,0.9)', fontSize: 11, marginTop: 4 },
   headerWarn: { color: '#FFEB3B', fontSize: 10, marginTop: 4, textAlign: 'center' },
+  firmwareBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF8E1',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFCC80',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  firmwareBannerTextWrap: { flex: 1, paddingRight: 8 },
+  firmwareBannerTitle: { fontSize: 12, color: '#E65100', ...FW600 },
+  firmwareBannerText: { fontSize: 10, color: '#795548', marginTop: 2 },
+  firmwareBannerActions: { flexDirection: 'row', alignItems: 'center' },
+  firmwareBannerBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+    marginLeft: 4,
+  },
+  firmwareBannerBtnDisabled: { opacity: 0.45 },
+  firmwareBannerBtnText: { fontSize: 10, color: '#E65100', ...FW600 },
+  firmwareBannerDismiss: { paddingHorizontal: 6, paddingVertical: 2, marginLeft: 2 },
+  firmwareBannerDismissText: { fontSize: 18, color: '#8D6E63' },
   connectScreen: { flex: 1, padding: 24 },
   photoCircle: { width: 200, height: 200, borderRadius: 100, backgroundColor: '#4CAF50', alignSelf: 'center', marginVertical: 20, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   photoImage: { width: '100%', height: '100%' },
@@ -2228,6 +2412,9 @@ const styles = StyleSheet.create({
   tankName: { fontSize: 15, ...FW600 },
   tankPercent: { fontSize: 13, color: '#666' },
   tankEta: { fontSize: 11, color: '#1565C0', marginBottom: 2, ...FW600 },
+  compoundTankBadge: { backgroundColor: '#F1F8E9', borderRadius: 7, padding: 6, marginBottom: 6 },
+  compoundTankTitle: { fontSize: 10, color: '#33691E', ...FW600 },
+  compoundTankDetail: { fontSize: 9, color: '#558B2F', marginTop: 2 },
   tankRateHint: { fontSize: 9, color: '#777', marginBottom: 6 },
   pumpRow: { flexDirection: 'row', alignItems: 'stretch', marginBottom: 6 },
   pumpSemiReset: {
